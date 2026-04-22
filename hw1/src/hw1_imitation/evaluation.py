@@ -30,7 +30,7 @@ class Logger:
 
     CSV_DISALLOWED_TYPES = (wandb.Image, wandb.Video, wandb.Histogram)
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, use_wandb: bool = False):
         if path.exists():
             raise FileExistsError(f"Log directory {path} already exists.")
         path.mkdir(parents=True)
@@ -38,6 +38,7 @@ class Logger:
         self.csv_path = path / "log.csv"
         self.header = None
         self.rows = []
+        self.use_wandb = use_wandb
 
     def log(self, row: dict[str, Any], step: int) -> None:
         row["step"] = step
@@ -56,10 +57,13 @@ class Logger:
             f.write(
                 ",".join([str(filtered_row.get(k, "")) for k in self.header]) + "\n"
             )
-        wandb.log(row, step=step)
+        if self.use_wandb:
+            wandb.log(row, step=step)
         self.rows.append(copy.deepcopy(row))
 
     def dump_for_grading(self) -> None:
+        if not self.use_wandb:
+            return
         wandb_dir = Path(wandb.run.dir).parent
         wandb.finish()
         shutil.copytree(wandb_dir, self.path / "wandb")
@@ -170,7 +174,7 @@ def evaluate_policy(
         action_chunk: np.ndarray | None = None
         frames: list[np.ndarray] = []
         max_reward = 0.0
-        save_video = ep_idx < num_video_episodes
+        save_video = logger.use_wandb and ep_idx < num_video_episodes
 
         while not done:
             if action_chunk is None or chunk_index >= chunk_size:
@@ -214,4 +218,5 @@ def evaluate_policy(
     for idx, video in enumerate(videos):
         log_data[f"eval/rollout_ep{idx}"] = video
     logger.log(log_data, step=step)
-    log_checkpoint_artifact(model, step=step)
+    if logger.use_wandb:
+        log_checkpoint_artifact(model, step=step)

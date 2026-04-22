@@ -30,9 +30,9 @@ class TrainConfig:
     # The path to download the Push-T dataset to.
     data_dir: Path = Path("data")
 
-    # The policy type -- either MSE or flow.
+    # The policy type -- either MSE, flow, or diffusion.
     policy_type: PolicyType = "mse"
-    # The number of denoising steps to use for the flow policy (has no effect for the MSE policy).
+    # The number of sampling steps for iterative policies like flow or diffusion.
     flow_num_steps: int = 10
     # The action chunk size.
     chunk_size: int = 8
@@ -53,6 +53,8 @@ class TrainConfig:
     seed: int = 42
     # WandB project name.
     wandb_project: str = "hw1-imitation"
+    # Whether to log to WandB.
+    use_wandb: bool = False
     # Experiment name suffix for logging and WandB.
     exp_name: str | None = None
 
@@ -122,10 +124,11 @@ def run_training(config: TrainConfig) -> None:
     if config.exp_name is not None:
         exp_name += f"_{config.exp_name}"
     log_dir = Path(LOGDIR_PREFIX) / exp_name
-    wandb.init(
-        project=config.wandb_project, config=config_to_dict(config), name=exp_name
-    )
-    logger = Logger(log_dir)
+    if config.use_wandb:
+        wandb.init(
+            project=config.wandb_project, config=config_to_dict(config), name=exp_name
+        )
+    logger = Logger(log_dir, use_wandb=config.use_wandb)
 
     ### TODO: PUT YOUR MAIN TRAINING LOOP HERE ###
     optimizer = torch.optim.Adam(
@@ -176,7 +179,7 @@ def run_training(config: TrainConfig) -> None:
             logger,
         )
 
-    torch.save(model.state_dict(), "final_model.pt")
+    torch.save(model.state_dict(), f"final_model_{config.policy_type}.pt")
     logger.dump_for_grading()
 
 
