@@ -13,7 +13,7 @@ import torch
 import tyro
 
 from hw1_imitation.data import Normalizer, download_pusht, load_pusht_zarr
-from hw1_imitation.model import PolicyType, build_policy
+from hw1_imitation.model import DiffusionScheduleType, PolicyType, build_policy
 
 ENV_ID = "gym_pusht/PushT-v0"
 
@@ -23,6 +23,7 @@ class PlayConfig:
     checkpoint_path: Path
     data_dir: Path = Path("data")
     policy_type: PolicyType = "mse"
+    diffusion_schedule: DiffusionScheduleType = "linear"
     chunk_size: int = 8
     hidden_dims: tuple[int, ...] = (256, 256, 256)
     flow_num_steps: int = 10
@@ -47,6 +48,7 @@ def load_policy(config: PlayConfig, device: torch.device) -> tuple[torch.nn.Modu
         action_dim=action_dim,
         chunk_size=config.chunk_size,
         hidden_dims=config.hidden_dims,
+        diffusion_schedule=config.diffusion_schedule,
     ).to(device)
 
     state_dict = torch.load(config.checkpoint_path, map_location=device)

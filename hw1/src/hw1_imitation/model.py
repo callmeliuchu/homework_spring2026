@@ -9,6 +9,9 @@ import torch
 from torch import nn
 
 
+DiffusionScheduleType: TypeAlias = Literal["linear", "sqrt", "cosine"]
+
+
 class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
     """Base class for action chunking policies."""
 
@@ -148,11 +151,12 @@ class DiffusionPolicy(BasePolicy):
         chunk_size: int,
         hidden_dims: tuple[int, ...] = (128, 128),
         num_train_steps: int = 50,
+        schedule_type: DiffusionScheduleType = "linear",
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
         self.num_train_steps = num_train_steps
-        betas = torch.linspace(1e-4, 0.02, num_train_steps)
-        alpha_bars = torch.cumprod(1.0 - betas, dim=0)
+        self.schedule_type = schedule_type
+        alpha_bars = self._build_alpha_bars(num_train_steps, schedule_type)
         self.register_buffer("alpha_bars", alpha_bars)
 
         layers = []
@@ -163,6 +167,28 @@ class DiffusionPolicy(BasePolicy):
             dim = hidden_dim
         layers.append(nn.Linear(dim, chunk_size * action_dim))
         self.mlp = nn.Sequential(*layers)
+
+    @staticmethod
+    def _build_alpha_bars(
+        num_train_steps: int,
+        schedule_type: DiffusionScheduleType,
+    ) -> torch.Tensor:
+        if schedule_type == "linear":
+            betas = torch.linspace(1e-4, 0.02, num_train_steps)
+            return torch.cumprod(1.0 - betas, dim=0)
+        if schedule_type == "sqrt":
+            return torch.linspace(1.0, 0.0, num_train_steps)
+        if schedule_type == "cosine":
+            steps = torch.linspace(0, num_train_steps, num_train_steps + 1)
+            offset = 0.008
+            alpha_bar_curve = torch.cos(
+                ((steps / num_train_steps) + offset) / (1 + offset) * torch.pi * 0.5
+            ) ** 2
+            alpha_bar_curve = alpha_bar_curve / alpha_bar_curve[0]
+            betas = 1.0 - (alpha_bar_curve[1:] / alpha_bar_curve[:-1])
+            betas = betas.clamp(1e-4, 0.999)
+            return torch.cumprod(1.0 - betas, dim=0)
+        raise ValueError(f"Unknown diffusion schedule type: {schedule_type}")
 
     def _alpha_sigma(self, timesteps: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         alpha_bar = self.alpha_bars[timesteps].view(-1, 1, 1)
@@ -260,6 +286,7 @@ def build_policy(
     action_dim: int,
     chunk_size: int,
     hidden_dims: tuple[int, ...] = (128, 128),
+    diffusion_schedule: DiffusionScheduleType = "linear",
 ) -> BasePolicy:
     if policy_type == "mse":
         return MSEPolicy(
@@ -281,5 +308,6 @@ def build_policy(
             action_dim=action_dim,
             chunk_size=chunk_size,
             hidden_dims=hidden_dims,
+            schedule_type=diffusion_schedule,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")

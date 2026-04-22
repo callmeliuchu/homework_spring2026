@@ -19,7 +19,7 @@ from hw1_imitation.data import (
     download_pusht,
     load_pusht_zarr,
 )
-from hw1_imitation.model import build_policy, PolicyType
+from hw1_imitation.model import build_policy, DiffusionScheduleType, PolicyType
 from hw1_imitation.evaluation import Logger, evaluate_policy
 
 LOGDIR_PREFIX = "exp"
@@ -34,6 +34,7 @@ class TrainConfig:
     policy_type: PolicyType = "mse"
     # The number of sampling steps for iterative policies like flow or diffusion.
     flow_num_steps: int = 10
+    diffusion_schedule: DiffusionScheduleType = "linear"
     # The action chunk size.
     chunk_size: int = 8
 
@@ -90,7 +91,7 @@ def config_to_dict(config: TrainConfig) -> dict[str, Any]:
 
 def run_training(config: TrainConfig) -> None:
     set_seed(config.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps")
     print(f"Using device: {device}")
 
     zarr_path = download_pusht(config.data_dir)
@@ -118,6 +119,7 @@ def run_training(config: TrainConfig) -> None:
         action_dim=actions.shape[1],
         chunk_size=config.chunk_size,
         hidden_dims=config.hidden_dims,
+        diffusion_schedule=config.diffusion_schedule,
     ).to(device)
 
     exp_name = f"seed_{config.seed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -153,18 +155,18 @@ def run_training(config: TrainConfig) -> None:
                 logger.log({"train/loss": float(loss.item())}, step=step)
                 print(f"epoch={epoch} step={step} loss={loss.item():.6f}")
 
-            if step % config.eval_interval == 0:
-                evaluate_policy(
-                    model,
-                    normalizer,
-                    device,
-                    config.chunk_size,
-                    config.video_size,
-                    config.num_video_episodes,
-                    config.flow_num_steps,
-                    step,
-                    logger,
-                )
+            # if step % config.eval_interval == 0:
+            #     evaluate_policy(
+            #         model,
+            #         normalizer,
+            #         device,
+            #         config.chunk_size,
+            #         config.video_size,
+            #         config.num_video_episodes,
+            #         config.flow_num_steps,
+            #         step,
+            #         logger,
+            #     )
 
     if step % config.eval_interval != 0:
         evaluate_policy(
