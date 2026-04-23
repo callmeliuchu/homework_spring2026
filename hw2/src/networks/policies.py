@@ -61,7 +61,13 @@ class MLPPolicy(nn.Module):
         """Takes a single observation (as a numpy array) and returns a single action (as a numpy array)."""
         # TODO: implement get_action
         action = None
-
+        obs_tensor = ptu.from_numpy(obs) # B C
+        output = self.forward(obs_tensor)
+        if self.discrete:
+            dist = D.Categorical(logits=output)
+            action = ptu.to_numpy(dist.sample())
+        else:
+            action = ptu.to_numpy(output.sample())
         return action
 
     def forward(self, obs: torch.FloatTensor):
@@ -71,11 +77,12 @@ class MLPPolicy(nn.Module):
         flexible objects, such as a `torch.distributions.Distribution` object. It's up to you!
         """
         if self.discrete:
-            # TODO: define the forward pass for a policy with a discrete action space.
-            pass
+            output = self.logits_net(obs)
         else:
-            # TODO: define the forward pass for a policy with a continuous action space.
-            pass
+            mean_act = self.mean_net(obs)
+            std = torch.exp(self.logstd)
+            output = D.Normal(mean_act, std)
+        return output
 
     def update(self, obs: np.ndarray, actions: np.ndarray, *args, **kwargs) -> dict:
         """
@@ -92,7 +99,7 @@ class MLPPolicyPG(MLPPolicy):
         self,
         obs: np.ndarray,
         actions: np.ndarray,
-        advantages: np.ndarray,
+        advantages: np.ndarray, # B 1
     ) -> dict:
         """Implements the policy gradient actor update."""
         obs = ptu.from_numpy(obs)
@@ -101,10 +108,21 @@ class MLPPolicyPG(MLPPolicy):
 
         # TODO: compute the policy gradient actor loss
         loss = None
-
+        
+        if self.discrete:
+            logits = self.forward(obs) # B act_dim
+            dist = D.Categorical(logits=logits)
+            log_probs = dist.log_prob(actions.long().squeeze(-1) if actions.ndim > 1 else actions.long())
         # TODO: perform an optimizer step
-        pass
+        else:
+            dist = self.forward(obs) # B act_dim
+            log_probs = dist.log_prob(actions).sum(dim=-1) # B act_dim
 
+        loss = (-advantages * log_probs).mean()
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
         return {
             "Actor Loss": loss.item(),
         }
