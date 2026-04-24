@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import time
+from itertools import count
 
 import gym
 import numpy as np
@@ -76,6 +77,11 @@ def main() -> None:
     parser.add_argument("--max_steps", type=int, default=500)
     parser.add_argument("--sleep", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--forever",
+        action="store_true",
+        help="Continuously restart episodes until interrupted (Ctrl+C).",
+    )
     args = parser.parse_args()
 
     ptu.init_gpu(use_gpu=False)
@@ -85,7 +91,8 @@ def main() -> None:
     env = gym.make(cfg["env_name"], render_mode="human")
 
     try:
-        for episode in range(args.episodes):
+        episode_iter = count() if args.forever else range(args.episodes)
+        for episode in episode_iter:
             obs = reset_env(env)
             episode_return = 0.0
 
