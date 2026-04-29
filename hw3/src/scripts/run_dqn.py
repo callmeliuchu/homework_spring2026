@@ -1,3 +1,4 @@
+from math import e
 import time
 import argparse
 import yaml
@@ -87,7 +88,7 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         epsilon = exploration_schedule.value(step)
 
         # TODO(Section 2.4): Compute action
-        action = None
+        action = agent.get_action(observation,epsilon=epsilon)
         # ENDTODO
 
         next_observation, reward, done, info = env.step(action)
@@ -128,13 +129,19 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         # Main DQN training loop
         if step >= config["learning_starts"]:
             # TODO(Section 2.4): Sample config["batch_size"] samples from the replay buffer
-            batch = None
+            batch = replay_buffer.sample(config["batch_size"])
             # ENDTODO
 
             batch = ptu.from_numpy(batch)
 
             # TODO(Section 2.4): Train the agent.
-            update_info = None
+            #           "observations": self.framebuffer[observation_framebuffer_idcs],
+            # "actions": self.actions[rand_indices],
+            # "rewards": self.rewards[rand_indices],
+            # "next_observations": self.framebuffer[next_observation_framebuffer_idcs],
+            # "dones": self.dones[rand_indices],
+            update_info = agent.update(batch['observations'],batch['actions'],batch['rewards'],batch['next_observations'],
+            batch['dones'],step)
             # ENDTODO
 
             # Logging code
@@ -214,7 +221,7 @@ def make_logger(config: dict, args: argparse.Namespace) -> Logger:
         project=args.wandb_project,
         group=config["log_name"],
         name=logdir.split("/")[-1],
-        mode="online",
+        mode="disabled",
         config=wandb_config,
     )
 
