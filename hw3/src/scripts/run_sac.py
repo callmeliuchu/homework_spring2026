@@ -62,7 +62,7 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
             action = env.action_space.sample()
         else:
             # TODO(Section 3.1): Select an action
-            action = None
+            action = agent.get_action(observation)
             # ENDTODO
 
         # Step the environment and add the data to the replay buffer
@@ -87,8 +87,20 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         # Train the agent
         if step >= config["training_starts"]:
             # TODO(Section 3.1): Sample a batch of config["batch_size"] transitions from the replay buffer
-            batch = None
-            update_info = None
+            batch = ptu.from_numpy(replay_buffer.sample(config['batch_size']))
+            #             "observations": self.observations[rand_indices],
+            # "actions": self.actions[rand_indices],
+            # "rewards": self.rewards[rand_indices],
+            # "next_observations": self.next_observations[rand_indices],
+            # "dones": self.dones[rand_indices],
+            update_info = agent.update(
+                batch['observations'],
+                batch['actions'],
+                batch['rewards'],
+                batch['next_observations'],
+                batch['dones'],
+                step
+            )
             # ENDTODO
 
             # Logging
@@ -166,7 +178,7 @@ def make_logger(config: dict, args: argparse.Namespace) -> Logger:
         project=args.wandb_project,
         group=config["log_name"],
         name=logdir.split("/")[-1],
-        mode="online",
+        mode="disabled",
         config=wandb_config,
     )
 
