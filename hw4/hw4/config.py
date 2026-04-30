@@ -55,7 +55,7 @@ class TrainConfig:
     # Logging / checkpointing
     wandb_project: str = "llm-rl-hw4"
     wandb_name: str = "run"
-    wandb_enabled: bool = True
+    wandb_enabled: bool = False
     sample_log_interval: int = 10
     sample_markdown_log_interval: int = 1
     sample_log_n: int = 3

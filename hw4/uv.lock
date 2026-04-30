@@ -198,6 +198,7 @@ name = "cs285-hw4-llm-rl"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "huggingface-hub" },
     { name = "modal" },
 ]
 
@@ -215,6 +216,7 @@ remote = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'remote'", specifier = ">=2.19.0" },
+    { name = "huggingface-hub", specifier = ">=0.36.2" },
     { name = "modal", specifier = ">=1.0.0" },
     { name = "numpy", marker = "extra == 'remote'", specifier = "<2.0" },
     { name = "peft", marker = "extra == 'remote'", specifier = ">=0.13.0" },
