@@ -32,7 +32,7 @@ class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
         self,
         state: torch.Tensor,
         *,
-        num_steps: int = 10,  # applicable for iterative samplers like flow or diffusion
+        num_steps: int = 10,  # only applicable for flow policy
     ) -> torch.Tensor:
         """Generate a chunk of actions with shape (batch, chunk_size, action_dim)."""
 
@@ -48,14 +48,15 @@ class MSEPolicy(BasePolicy):
         chunk_size: int,
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
-        super().__init__(state_dim, action_dim, chunk_size)
+        # raise NotImplementedError
+        super().__init__(state_dim,action_dim,chunk_size)
         layers = []
-        dim = state_dim
-        for i in  range(0,len(hidden_dims)):
-            layers.append(nn.Linear(dim,hidden_dims[i]))
+        start = state_dim
+        for i in range(len(hidden_dims)):
+            layers.append(nn.Linear(start,hidden_dims[i]))
             layers.append(nn.ReLU())
-            dim = hidden_dims[i]
-        layers.append(nn.Linear(dim,chunk_size * action_dim))
+            start = hidden_dims[i]
+        layers.append(nn.Linear(start,chunk_size*action_dim))
         self.mlp = nn.Sequential(*layers)
 
     def compute_loss(
@@ -63,10 +64,12 @@ class MSEPolicy(BasePolicy):
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        pred_chunk = self.mlp(state).reshape(
-            -1, self.chunk_size, self.action_dim
-        )
-        return torch.mean((pred_chunk - action_chunk) ** 2)
+        # raise NotImplementedError
+        # state B,state_dim action_chunks B chunk_size Action_dim
+        outputs = self.mlp(state) # B,chunk_size*action_dim
+        outputs = outputs.reshape(-1,self.chunk_size,self.action_dim)
+        loss = ((outputs - action_chunk)**2).sum(dim=-1).mean()
+        return loss
 
     def sample_actions(
         self,
@@ -76,8 +79,9 @@ class MSEPolicy(BasePolicy):
     ) -> torch.Tensor:
         # raise NotImplementedError
         with torch.no_grad():
-            chunks = self.mlp(state) # B K C
-            return chunks.reshape(-1,self.chunk_size,self.action_dim)
+            outputs = self.mlp(state) # B,chunk_size*action_dim
+            outputs = outputs.reshape(-1,self.chunk_size,self.action_dim)
+            return outputs
 
 
 class FlowMatchingPolicy(BasePolicy):
@@ -91,35 +95,36 @@ class FlowMatchingPolicy(BasePolicy):
         chunk_size: int,
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
-        super().__init__(state_dim, action_dim, chunk_size)
+        super().__init__(state_dim,action_dim,chunk_size)
         layers = []
-        dim = state_dim + chunk_size * action_dim + 1 ## [ state chunk_size * action_dim t]
-        for i in  range(0,len(hidden_dims)):
-            layers.append(nn.Linear(dim,hidden_dims[i]))
+        start = state_dim + chunk_size*action_dim + 1 # state 
+        for i in range(len(hidden_dims)):
+            layers.append(nn.Linear(start,hidden_dims[i]))
             layers.append(nn.ReLU())
-            dim = hidden_dims[i]
-        layers.append(nn.Linear(dim,chunk_size * action_dim))
+            start = hidden_dims[i]
+        layers.append(nn.Linear(start,chunk_size*action_dim))
         self.mlp = nn.Sequential(*layers)
+
 
     def compute_loss(
         self,
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        # raise NotImplementedError
-        # v = self.mlp(state) # B K C
-        # v = v.reshape(-1,self.chunk_size,self.action_dim)
         B = state.shape[0]
-        t = torch.rand(B, 1,1, device=action_chunk.device)
-        noise = torch.randn(B,self.chunk_size,self.action_dim,device=state.device)
-        chunks = (1-t) * noise +   t * action_chunk
-        flaten_chunks = chunks.reshape(-1,self.chunk_size*self.action_dim)
-        input_state = torch.concat([state,flaten_chunks,t.reshape(B,1)],dim=-1)
-        v  = self.mlp(input_state).reshape(-1,self.chunk_size*self.action_dim)
-        target = -noise.reshape(-1,self.chunk_size*self.action_dim) + action_chunk.reshape(-1,self.chunk_size*self.action_dim)
-        loss = ((v-target)**2).mean()
+        t = torch.rand(B, 1, 1, device=state.device)
+        theta = (torch.pi / 2) * t
+        noise = torch.randn(B, self.chunk_size, self.action_dim, device=state.device)
+        Xt = torch.cos(theta) * noise + torch.sin(theta) * action_chunk
+        Xt = Xt.reshape(-1,self.action_dim*self.chunk_size)
+        velocity = (torch.pi / 2) * (
+            -torch.sin(theta) * noise + torch.cos(theta) * action_chunk
+        )
+        St = torch.concat([state,Xt,t.reshape(B,1)],dim=-1)
+        pred_velocity = self.mlp(St)
+        pred_velocity = pred_velocity.reshape(-1,self.chunk_size,self.action_dim) # B,A,C
+        loss = ((pred_velocity - velocity) ** 2).mean()
         return loss
-
 
     def sample_actions(
         self,
@@ -129,16 +134,15 @@ class FlowMatchingPolicy(BasePolicy):
     ) -> torch.Tensor:
         # raise NotImplementedError
         with torch.no_grad():
-            batch_size = state.shape[0]
-            chunks = torch.randn(batch_size,self.chunk_size,self.action_dim,device=state.device)
-            dt =  1 / num_steps
-            for i in range(num_steps):
-                t = torch.ones(batch_size,1,device=state.device) * i / num_steps
-                flaten_chunks = chunks.reshape(-1,self.chunk_size*self.action_dim)
-                input_state = torch.concat([state,flaten_chunks,t],dim=-1)
-                v  = self.mlp(input_state).reshape(-1,self.chunk_size,self.action_dim)
-                chunks += dt * v
-            return chunks
+            delta = 1 / num_steps
+            B = state.shape[0]
+            chunk = torch.randn(B,self.action_dim*self.chunk_size).to(state.device) # B,A,C
+            for step in range(num_steps):
+                t = torch.full((B,1), (step + 1) / num_steps, device=state.device)
+                St = torch.concat([state,chunk,t],dim=-1)
+                velocity = self.mlp(St)
+                chunk += delta * velocity
+            return chunk.reshape(-1,self.chunk_size,self.action_dim)
 
 
 class DiffusionPolicy(BasePolicy):

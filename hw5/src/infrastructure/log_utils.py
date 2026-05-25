@@ -70,7 +70,8 @@ class Logger:
             self.file.write(','.join([str(filtered_row.get(k, '')) for k in self.header]) + '\n')
         self.file.flush()
 
-        wandb.log(row, step=step)
+        if wandb.run is not None:
+            wandb.log(row, step=step)
         self.rows.append(copy.deepcopy(row))
 
     def close(self):

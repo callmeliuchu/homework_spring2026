@@ -88,7 +88,7 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         epsilon = exploration_schedule.value(step)
 
         # TODO(Section 2.4): Compute action
-        action = agent.get_action(observation,epsilon=epsilon)
+        action = agent.get_action(observation,epsilon)
         # ENDTODO
 
         next_observation, reward, done, info = env.step(action)
@@ -140,8 +140,15 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
             # "rewards": self.rewards[rand_indices],
             # "next_observations": self.framebuffer[next_observation_framebuffer_idcs],
             # "dones": self.dones[rand_indices],
-            update_info = agent.update(batch['observations'],batch['actions'],batch['rewards'],batch['next_observations'],
-            batch['dones'],step)
+            #   obs: torch.Tensor,
+            # action: torch.Tensor,
+            # reward: torch.Tensor,
+            # next_obs: torch.Tensor,
+            # done: torch.Tensor,
+            # step: int,
+            update_info = agent.update(batch['observations'],batch['actions'],
+            batch['rewards'],batch['next_observations'],batch['dones'],step
+            )
             # ENDTODO
 
             # Logging code

@@ -1,7 +1,6 @@
 from typing import Optional, Sequence
 import numpy as np
 import torch
-from wandb import agent
 
 from networks.critics import ValueCritic
 from networks.policies import MLPPolicyPG
@@ -68,12 +67,14 @@ class PGAgent(nn.Module):
         # TODO: flatten the lists of arrays into single arrays, so that the rest of the code can be written in a vectorized
         # way. obs, actions, rewards, terminals, and q_values should all be arrays with a leading dimension of `batch_size`
         # beyond this point.
+
         obs = np.concatenate(obs,axis=0)
-        q_values = np.concatenate(q_values,axis=0)
         actions = np.concatenate(actions,axis=0)
         rewards = np.concatenate(rewards,axis=0)
         terminals = np.concatenate(terminals,axis=0)
+        q_values = np.concatenate(q_values, axis=0)
         
+
         # step 2: calculate advantages from Q values
         advantages: np.ndarray = self._estimate_advantage(
             obs, rewards, q_values, terminals
@@ -82,15 +83,16 @@ class PGAgent(nn.Module):
         # step 3: use all datapoints (s_t, a_t, adv_t) to update the PG actor/policy
         # TODO: update the PG actor/policy network once using the advantages
         info: dict = None
-        info = self.actor.update(obs=obs,actions=actions,advantages=advantages)
-
+        # obs: np.ndarray,
+        # actions: np.ndarray,
+        # advantages: np.ndarray,
+        info = self.actor.update(obs,actions,advantages)
 
         # step 4: if needed, use all datapoints (s_t, a_t, q_t) to update the PG critic/baseline
         if self.critic is not None:
             # TODO: perform `self.baseline_gradient_steps` updates to the critic/baseline network
-            critic_info = None
             for _ in range(self.baseline_gradient_steps):
-                critic_info = self.critic.update(obs=obs,q_values=q_values)
+                critic_info = self.critic.update(obs,q_values)
             info.update(critic_info)
 
         return info
@@ -103,27 +105,23 @@ class PGAgent(nn.Module):
         Note that all entries of the output list should be the exact same because each sum is from 0 to T (and doesn't
         involve t)!
         """
-        # return None
-        r = 0
-        for i in range(len(rewards)):
-            r += rewards[i] * self.gamma ** i
-        return [r] * len(rewards)
-
+        t = 0
+        for r in reversed(rewards):
+            t = t * self.gamma + r
+        return [t] * len(rewards)
 
     def _discounted_reward_to_go(self, rewards: Sequence[float]) -> Sequence[float]:
         """
         Helper function which takes a list of rewards {r_0, r_1, ..., r_t', ... r_T} and returns a list where the entry
-        in each index t is sum_{t'=t}^T gamma^(t'-t) * r_{t'}.
+        in each index t' is sum_{t'=t}^T gamma^(t'-t) * r_{t'}.
         """
-        # return None
-        r = 0
         ret = []
-        for i in range(len(rewards)-1,-1,-1):
-            r = r * self.gamma + rewards[i]
-            ret.append(r)
+        t = 0
+        for r in reversed(rewards):
+            t = t * self.gamma + r
+            ret.append(t)
         ret.reverse()
         return ret
-
 
     def _calculate_q_vals(self, rewards: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
         """Monte Carlo estimation of the Q function."""
@@ -139,6 +137,7 @@ class PGAgent(nn.Module):
             # In other words: Q(s_t, a_t) = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
             # TODO: use the helper function self._discounted_reward_to_go to calculate the Q-values
             q_values = [np.array(self._discounted_reward_to_go(rs.tolist())) for rs in rewards]
+
         return q_values
 
     def _estimate_advantage(
@@ -154,13 +153,15 @@ class PGAgent(nn.Module):
         """
         if self.critic is None:
             # TODO: if no baseline, then what are the advantages?
+            # advantages = None
             advantages = q_values
         else:
             # TODO: run the critic and use it as a baseline
-            obs_tensor = ptu.from_numpy(obs)
-            values = self.critic(obs_tensor)
-            values = ptu.to_numpy(values).reshape(-1)
-            print('xxxxxxxxxxxxx',values.shape,q_values.shape)
+            values = None
+            obs = ptu.from_numpy(obs)
+            values = self.critic(obs) # B,1
+            values = ptu.to_numpy(values).reshape(-1) # B,
+            # q_value = q_values.reshape(-1)
             assert values.shape == q_values.shape
 
             if self.gae_lambda is None:
@@ -178,9 +179,8 @@ class PGAgent(nn.Module):
                     # TODO: recursively compute advantage estimates starting from timestep T.
                     # HINT: use terminals to handle edge cases. terminals[i] is 1 if the state is the last in its
                     # trajectory, and 0 otherwise.
-                    done = 1 - terminals[i] 
-                    delta = rewards[i] +  self.gamma * values[i+1] * done - values[i]
-                    advantages[i] = self.gamma * self.gae_lambda * advantages[i+1] * done + delta
+                    delta = rewards[i] + self.gamma * values[i+1] * (1-terminals[i]) - values[i]
+                    advantages[i] = advantages[i+1] * (self.gamma * self.gae_lambda) * (1-terminals[i]) + delta
 
                 # remove dummy advantage
                 advantages = advantages[:-1]
@@ -188,5 +188,5 @@ class PGAgent(nn.Module):
         # TODO: normalize the advantages to have a mean of zero and a standard deviation of one within the batch
         if self.normalize_advantages:
             advantages = (advantages - advantages.mean()) / advantages.std()
-
+ 
         return advantages

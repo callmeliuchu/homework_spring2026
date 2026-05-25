@@ -30,9 +30,9 @@ class TrainConfig:
     # The path to download the Push-T dataset to.
     data_dir: Path = Path("data")
 
-    # The policy type -- either MSE, flow, or diffusion.
+    # The policy type -- either MSE or flow.
     policy_type: PolicyType = "mse"
-    # The number of sampling steps for iterative policies like flow or diffusion.
+    # The number of denoising steps to use for the flow policy (has no effect for the MSE policy).
     flow_num_steps: int = 10
     diffusion_schedule: DiffusionScheduleType = "linear"
     # The action chunk size.
@@ -133,56 +133,51 @@ def run_training(config: TrainConfig) -> None:
     logger = Logger(log_dir, use_wandb=config.use_wandb)
 
     ### TODO: PUT YOUR MAIN TRAINING LOOP HERE ###
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=config.lr, weight_decay=config.weight_decay
-    )
-    step = 0
+    # raise NotImplementedError
+    optim = torch.optim.Adam(model.parameters(),lr=config.lr)
+    best_mean_reward = float("-inf")
+    best_ckpt_path = Path(f"best_{config.policy_type}.pt")
+    for ep in range(config.num_epochs):
 
-    for epoch in range(config.num_epochs):
-        for state, chunks in loader:
-            model.train()
+        total_loss = 0.0
+        for state,chunk_action in loader:
             state = state.to(device)
-            chunks = chunks.to(device)
+            chunk_action = chunk_action.to(device)
+            loss = model.compute_loss(state,chunk_action)
 
-            optimizer.zero_grad()
-            loss = model.compute_loss(state, chunks)
+            optim.zero_grad()
             loss.backward()
-            optimizer.step()
+            optim.step()
+            print('one step loss',loss)
+            total_loss += loss
+        total_loss = total_loss / len(loader)
 
-            step += 1
+        print('average loss',ep,total_loss)
+        # model: BasePolicy,
+        # normalizer: Normalizer,
+        # device: torch.device,
+        # chunk_size: int,
+        # video_size: tuple[int, int],
+        # num_video_episodes: int,
+        # flow_num_steps: int,
+        # step: int,
+        # logger: Logger,
+        # if ep % 20 == 0:
+        #     evaluate_policy(model,normalizer,device,config.chunk_size,config.video_size,config.num_video_episodes,
+        #     config.flow_num_steps,ep,logger)
+        #     if logger.rows:
+        #         mean_reward = logger.rows[-1].get("eval/mean_reward")
+        #         if isinstance(mean_reward, (float, int)) and mean_reward > best_mean_reward:
+        #             best_mean_reward = float(mean_reward)
+        #             torch.save(model.state_dict(), best_ckpt_path)
+        #             print(
+        #                 f"new best eval/mean_reward={best_mean_reward:.4f}, "
+        #                 f"saved to {best_ckpt_path}"
+        #             )
+    
 
-            if step % config.log_interval == 0:
-                logger.log({"train/loss": float(loss.item())}, step=step)
-                print(f"epoch={epoch} step={step} loss={loss.item():.6f}")
+    torch.save(model.state_dict(), f'{config.policy_type}.pt')
 
-            # if step % config.eval_interval == 0:
-            #     evaluate_policy(
-            #         model,
-            #         normalizer,
-            #         device,
-            #         config.chunk_size,
-            #         config.video_size,
-            #         config.num_video_episodes,
-            #         config.flow_num_steps,
-            #         step,
-            #         logger,
-            #     )
-
-    if step % config.eval_interval != 0:
-        evaluate_policy(
-            model,
-            normalizer,
-            device,
-            config.chunk_size,
-            config.video_size,
-            config.num_video_episodes,
-            config.flow_num_steps,
-            step,
-            logger,
-        )
-
-    torch.save(model.state_dict(), f"final_model_{config.policy_type}.pt")
-    logger.dump_for_grading()
 
 
 def main() -> None:

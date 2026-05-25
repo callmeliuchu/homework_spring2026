@@ -1,5 +1,6 @@
 import argparse
 import os
+from datetime import datetime
 import time
 
 import gym
@@ -13,6 +14,7 @@ from infrastructure import pytorch_util as ptu
 from infrastructure.log_utils import setup_wandb, Logger, dump_log
 
 MAX_NVIDEO = 2
+ABSOLUTE_MODEL_PATH = "agent.pt"
 
 
 def run_training_loop(logger, args):
@@ -60,8 +62,9 @@ def run_training_loop(logger, args):
         print(f"\n********** Iteration {itr} ************")
         # TODO: sample `args.batch_size` transitions using utils.sample_trajectories
         # make sure to use `max_ep_len`
-        trajs, envsteps_this_batch =  utils.sample_trajectories(
-                env, agent.actor, args.eval_batch_size, max_ep_len
+        trajs, envsteps_this_batch = None, None
+        trajs, envsteps_this_batch  =  utils.sample_trajectories(
+                env, agent.actor, args.batch_size, max_ep_len
         )
         total_envsteps += envsteps_this_batch
 
@@ -71,20 +74,17 @@ def run_training_loop(logger, args):
 
         # TODO: train the agent using the sampled trajectories and the agent's update function
         train_info: dict = None
-        ##
-
-        #         "observation": np.array(obs, dtype=np.float32),
+        # obs: Sequence[np.ndarray],
+        # actions: Sequence[np.ndarray],
+        # rewards: Sequence[np.ndarray],
+        # terminals: Sequence[np.ndarray],
+        # "observation": np.array(obs, dtype=np.float32),
         # "image_obs": np.array(image_obs, dtype=np.uint8),
         # "reward": np.array(rewards, dtype=np.float32),
         # "action": np.array(acs, dtype=np.float32),
         # "next_observation": np.array(next_obs, dtype=np.float32),
         # "terminal": np.array(terminals, dtype=np.float32),
-        train_info = agent.update(
-            trajs_dict['observation'],
-            trajs_dict['action'],
-            trajs_dict['reward'],
-            trajs_dict['terminal'],
-        )
+        train_info = agent.update(trajs_dict['observation'],trajs_dict['action'],trajs_dict['reward'],trajs_dict['terminal'])
 
         if itr % args.scalar_log_freq == 0:
             # save eval metrics
@@ -124,6 +124,8 @@ def run_training_loop(logger, args):
             )
 
     dump_log(agent, logger, args, args.save_dir)
+    # Also save a copy to a fixed absolute path.
+    torch.save(agent.state_dict(), ABSOLUTE_MODEL_PATH)
 
 
 def setup_arguments(args=None):
@@ -168,10 +170,10 @@ def main(args):
     # Create directory for logging
     logdir_prefix = "exp"  # Keep for autograder
 
-    exp_name = f"{args.env_name}_{args.exp_name}_sd{args.seed}"
+    exp_name = f"{args.env_name}_{args.exp_name}_sd{args.seed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     config = vars(args)
-    setup_wandb(project='cs285_hw2', name=exp_name, config=config, mode='disabled')
+    setup_wandb(project='cs285_hw2', name=exp_name, config=config)
     args.save_dir = os.path.join(logdir_prefix, exp_name)
     os.makedirs(args.save_dir, exist_ok=True)
     logger = Logger(os.path.join(args.save_dir, 'log.csv'))

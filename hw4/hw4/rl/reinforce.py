@@ -88,39 +88,7 @@ class Reinforce(RLAlgorithm):
             # 4. kl = approx_kl_from_logprobs(new_logp, mb.ref_logprobs, mask)
             # 5. entropy = -masked_mean(new_logp, mask) for LOGGING ONLY
             #    (do not add an entropy term to the loss)
-            # raise NotImplementedError("student TODO: Reinforce.update minibatch computations")
-            new_logp = compute_per_token_logprobs(model,mb.input_ids,mb.attention_mask)
-            seq_logp = masked_mean_per_row(new_logp,mask) # B,1
-            pg_loss = -(seq_logp * adv).mean() # B,1
-            kl = approx_kl_from_logprobs(new_logp,mb.ref_logprobs,mask)
-            entropy = -masked_mean(new_logp,mask)
-
-            loss = (pg_loss + cfg.kl_coef * kl) / max(1, grad_accum_steps)
-            if not torch.isfinite(loss):
-                skipped_nonfinite += 1
-                optimizer.zero_grad(set_to_none=True)
-                accum = 0
-                continue
-            loss.backward()
-
-            accum += 1
-
-            if (accum % max(1, grad_accum_steps)) == 0:
-                gnorm = clip_grad_norm_(trainable_params, cfg.max_grad_norm)
-                if not math.isfinite(gnorm):
-                    skipped_nonfinite += 1
-                    optimizer.zero_grad(set_to_none=True)
-                    accum = 0
-                    continue
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                total_grad_norm += float(gnorm)
-                opt_steps += 1
-
-            total_loss += float((loss.detach() * max(1, grad_accum_steps)).item())
-            total_kl += float(kl.detach().item())
-            total_entropy += float(entropy.detach().item())
-            n_mb += 1
+            raise NotImplementedError("student TODO: Reinforce.update minibatch computations")
 
         if accum > 0 and (accum % max(1, grad_accum_steps)) != 0:
             gnorm = clip_grad_norm_(trainable_params, cfg.max_grad_norm)

@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 import tempfile
 from typing import Callable, Optional
@@ -8,13 +7,12 @@ import numpy as np
 import torch
 from torch.optim import Optimizer
 import tqdm
-import wandb
 
 import configs
 from agents import agents
 from infrastructure import utils
 from infrastructure import pytorch_util as ptu
-from infrastructure.log_utils import setup_wandb, Logger, dump_log
+from infrastructure.log_utils import Logger, dump_log
 
 
 def get_run_name(args: argparse.Namespace) -> str:
@@ -24,6 +22,8 @@ def get_run_name(args: argparse.Namespace) -> str:
     exp_name = f"sd{args.seed}_{args.base_config}_{args.env_name}"
     if args.alpha is not None:
         exp_name = f"{exp_name}_a{args.alpha}"
+    if args.flow_steps is not None:
+        exp_name = f"{exp_name}_f{args.flow_steps}"
     if args.expectile is not None:
         exp_name = f"{exp_name}_e{args.expectile}"
     return exp_name
@@ -206,6 +206,7 @@ def setup_arguments(args=None):
 
     parser.add_argument("--expectile", type=float, default=None)
     parser.add_argument("--alpha", type=float, default=None)
+    parser.add_argument("--flow_steps", type=int, default=None)
 
     # For njobs mode (optional)
     parser.add_argument("--njobs", type=int, default=None)
@@ -244,43 +245,19 @@ def main(args, checkpoint_callback: Optional[Callable[[], None]] = None):
         config['agent_kwargs']['expectile'] = args.expectile
     if args.alpha is not None:
         config['agent_kwargs']['alpha'] = args.alpha
+    if args.flow_steps is not None:
+        config['agent_kwargs']['flow_steps'] = args.flow_steps
 
-    wandb_run_path = os.path.join(args.save_dir, "wandb_run.json")
-    wandb_run_id = None
-    if os.path.exists(wandb_run_path):
-        with open(wandb_run_path) as f:
-            wandb_run_id = json.load(f).get("run_id")
-    wandb_resume = "must" if wandb_run_id is not None else None
-    wandb_run = setup_wandb(
-        project='cs285_hw5',
-        name=exp_name,
-        group=args.run_group,
-        run_id=wandb_run_id,
-        resume=wandb_resume,
-        config=config,
-    )
-    temp_fd, temp_path = tempfile.mkstemp(dir=args.save_dir, suffix=".wandb.tmp")
-    os.close(temp_fd)
-    try:
-        with open(temp_path, "w") as f:
-            json.dump({"run_id": wandb_run.id}, f)
-        os.replace(temp_path, wandb_run_path)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
     train_logger = Logger(os.path.join(args.save_dir, 'train.csv'))
     eval_logger = Logger(os.path.join(args.save_dir, 'eval.csv'))
 
-    try:
-        run_training_loop(
-            config,
-            train_logger,
-            eval_logger,
-            args,
-            checkpoint_callback=checkpoint_callback,
-        )
-    finally:
-        wandb.finish()
+    run_training_loop(
+        config,
+        train_logger,
+        eval_logger,
+        args,
+        checkpoint_callback=checkpoint_callback,
+    )
 
 
 if __name__ == "__main__":

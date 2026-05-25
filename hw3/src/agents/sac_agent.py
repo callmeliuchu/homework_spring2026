@@ -89,13 +89,15 @@ class SoftActorCritic(nn.Module):
         if self.auto_tune_temperature:
             # TODO(Section 3.5): Initialize log_alpha, alpha_optimizer, and target_entropy
             # Hint: Initialize log_alpha to log(temperature) so alpha starts at the given temperature
+            initial_alpha = max(float(self.temperature), 1e-8)
             self.log_alpha = nn.Parameter(
-                torch.tensor(np.log(temperature),dtype=torch.float32,device=ptu.device)
+                torch.tensor(np.log(initial_alpha), dtype=torch.float32, device=ptu.device)
             )
             self.alpha_optimizer = torch.optim.Adam(
-                [self.log_alpha],lr=alpha_learning_rate
+                [self.log_alpha],
+                lr = alpha_learning_rate
             )
-            self.target_entropy = - float(self.action_dim)
+            self.target_entropy = -action_dim
             # ENDTODO
 
         self.critic_loss = nn.MSELoss()
@@ -109,7 +111,9 @@ class SoftActorCritic(nn.Module):
         if self.auto_tune_temperature:
             # TODO(Section 3.5): Return the current learned temperature
             # skip here until we implement the temperature tuning
-            return self.log_alpha.exp().item()
+            # raise NotImplementedError()
+            with torch.no_grad():
+                return self.log_alpha.exp().item()
             # ENDTODO
         else:
             return self.temperature
@@ -168,6 +172,7 @@ class SoftActorCritic(nn.Module):
             next_qs = next_qs.mean(dim=0)
         elif self.target_critic_backup_type == "min":
             next_qs = next_qs.min(dim=0).values
+            # raise NotImplementedError()
         else:
             raise ValueError(
                 f"Invalid critic backup strategy {self.target_critic_backup_type}"
@@ -201,17 +206,16 @@ class SoftActorCritic(nn.Module):
         # Compute target values
         with torch.no_grad():
             # TODO(Section 3.2): Sample from the actor and compute next Q-values
-            next_action_distribution = self.actor(next_obs) # B, A
-            next_action = next_action_distribution.sample() # B, A
-            next_qs = self.target_critic(next_obs,next_action)
+            next_action_distribution = self.actor(next_obs) # dist
+            next_action = next_action_distribution.sample() # B,A
+            next_qs =  self.target_critic(next_obs,next_action) # num_critic, B, 1
             # ENDTODO
 
             if self.use_entropy_bonus and self.backup_entropy:
                 # TODO(Section 3.3): Add entropy bonus to the target values for SAC
-                log_probs = next_action_distribution.log_prob(next_action) # B ,A
-                next_action_entropy =  -log_probs # (B,A)
-                next_qs = next_qs + self.get_temperature() * next_action_entropy[None,:]
+                next_action_entropy = -next_action_distribution.log_prob(next_action)
                 # Hint: next_qs = ...
+                next_qs = next_qs + self.get_temperature() * next_action_entropy[None]
                 # ENDTODO
 
             # Handle Q-values from multiple different target critic networks (if necessary)
@@ -223,7 +227,7 @@ class SoftActorCritic(nn.Module):
             ), next_qs.shape
 
             # TODO(Section 3.2): Compute the target Q-value
-            target_values = reward + self.discount * (1-done.float()) * next_qs
+            target_values = reward[None] + self.discount * next_qs * (1-done.float())[None]
             # ENDTODO
             assert target_values.shape == (
                 self.num_critic_networks,
@@ -231,11 +235,7 @@ class SoftActorCritic(nn.Module):
             ), target_values.shape
 
         # TODO(Section 3.2): Update the critic
-        # Predict Q-values
         q_values = self.critic(obs,action)
-        assert q_values.shape == (self.num_critic_networks, batch_size), q_values.shape
-
-        # Compute loss
         loss = ((q_values - target_values) ** 2).mean()
         # ENDTODO
 
@@ -256,8 +256,10 @@ class SoftActorCritic(nn.Module):
 
         # TODO(Section 3.3): Compute the entropy of the action distribution.
         # Note: Think about whether to use .rsample() or .sample() here...
+        # raise NotImplementedError()
         action = action_distribution.rsample()
-        return -action_distribution.log_prob(action)
+        log_prob = action_distribution.log_prob(action)
+        return -log_prob
         # ENDTODO
 
     def actor_loss_reparametrize(self, obs: torch.Tensor):
@@ -269,23 +271,25 @@ class SoftActorCritic(nn.Module):
         # TODO(Section 3.4): Sample actions using reparameterization (replace the placeholder below)
         # Note: Think about whether to use .rsample() or .sample() here, and why...
         action = torch.zeros(batch_size, self.action_dim, device=obs.device) # replace this with the correct action
-        action = action_distribution.rsample() # B,A
+        action = action_distribution.rsample()
         assert action.shape == (batch_size, self.action_dim), action.shape
         # ENDTODO
 
         # TODO(Section 3.4): Compute Q-values for the sampled state-action pair (replace the placeholder below)
         q_values = torch.zeros(self.num_critic_networks, batch_size, device=obs.device) # replace this with the correct q_values
-        q_values = self.critic(obs,action) # K,B C
+        q_values = self.critic(obs,action) # num_critic B 1
+
+
         assert q_values.shape == (self.num_critic_networks, batch_size), q_values.shape
         # ENDTODO
 
         # Compute log probabilities for alpha update (Section 3.5)
-        log_prob = action_distribution.log_prob(action) # B,A
+        log_prob = action_distribution.log_prob(action)
 
         # TODO(Section 3.4): Compute the actor loss (replace the placeholder below)
         loss = torch.tensor(0.0, device=obs.device) # replace this with the correct loss
-        q_pi = q_values.mean(dim=0)
-        loss = (self.get_temperature()*log_prob - q_pi).mean()
+        q_values = q_values.mean(dim=0)
+        loss =  (self.get_temperature() * log_prob - q_values).mean()
         # ENDTODO
         
         entropy = -log_prob
@@ -298,7 +302,8 @@ class SoftActorCritic(nn.Module):
         loss, entropy, log_prob = self.actor_loss_reparametrize(obs)
 
         # TODO(Section 3.3): Add the entropy bonus to the actor loss: loss -= [your entropy bonus here]
-        # loss = loss - log_prob.mean()
+        # loss, entropy, log_prob = self.actor_loss_reparametrize(obs)
+        pass
         # ENDTODO
 
         self.actor_optimizer.zero_grad()
@@ -330,16 +335,16 @@ class SoftActorCritic(nn.Module):
             return {}
 
         # TODO(Section 3.5): Implement dual gradient descent for temperature tuning
-        alpha = self.log_alpha.exp()
-        alpha_loss = -(alpha * (log_prob.detach() + self.target_entropy)).mean()
-
+        # raise NotImplementedError()
+        alpha_loss = -(
+            self.log_alpha * (log_prob.detach() + self.target_entropy)
+        ).mean()
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.alpha_optimizer.step()
-
         return {
-            "alpha": alpha.item(),
-            "alpha_loss": alpha_loss.item(),
+            "alpha": self.log_alpha.exp().item(),
+            'alpha_loss': alpha_loss.item()
         }
         # ENDTODO
 
@@ -370,9 +375,17 @@ class SoftActorCritic(nn.Module):
 
         critic_infos = []
         # TODO(Section 3.2): Update the critic for num_critic_updates steps
+
+        # obs: torch.Tensor,
+        # action: torch.Tensor,
+        # reward: torch.Tensor,
+        # next_obs: torch.Tensor,
+        # done: torch.Tensor,
         for _ in range(self.num_critic_updates):
-            info = self.update_critic(observations,actions,rewards,next_observations,dones)
-            critic_infos.append(info)
+            critic_infos.append(
+                self.update_critic(observations,actions,rewards,next_observations,dones)
+            )
+        pass
         # ENDTODO
 
         # TODO(Section 3.3): Enable the actor update (once you have implemented entropy)

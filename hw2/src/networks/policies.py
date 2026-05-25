@@ -1,4 +1,3 @@
-import dis
 import itertools
 from torch import nn
 from torch.nn import functional as F
@@ -61,12 +60,12 @@ class MLPPolicy(nn.Module):
     def get_action(self, obs: np.ndarray) -> np.ndarray:
         """Takes a single observation (as a numpy array) and returns a single action (as a numpy array)."""
         # TODO: implement get_action
-        action = None
+        # action = None
         obs = ptu.from_numpy(obs)
         dist = self.forward(obs)
         action = dist.sample()
-        action = ptu.to_numpy(action)
-        return action
+        return ptu.to_numpy(action)
+        # return action
 
     def forward(self, obs: torch.FloatTensor):
         """
@@ -74,15 +73,18 @@ class MLPPolicy(nn.Module):
         able to differentiate through it. For example, you can return a torch.FloatTensor. You can also return more
         flexible objects, such as a `torch.distributions.Distribution` object. It's up to you!
         """
+        # if self.discrete:
+        #     # TODO: define the forward pass for a policy with a discrete action space.
+        #     pass
+        # else:
+        #     # TODO: define the forward pass for a policy with a continuous action space.
+        #     pass
         if self.discrete:
-            # TODO: define the forward pass for a policy with a discrete action space.
-            logits = self.logits_net(obs)   
-            dist = D.Categorical(logits=logits)
+            logits = self.logits_net(obs) # B, O ==> B, A
+            dist = D.Categorical(logits=logits) # B, A
         else:
-            # TODO: define the forward pass for a policy with a continuous action space.
             mean = self.mean_net(obs)
-            std = torch.exp(self.logstd)
-            dist = D.Normal(mean, std)
+            dist = distributions.Normal(mean,torch.exp(self.logstd))
         return dist
 
 
@@ -101,25 +103,25 @@ class MLPPolicyPG(MLPPolicy):
         self,
         obs: np.ndarray,
         actions: np.ndarray,
-        advantages: np.ndarray, # B 1
+        advantages: np.ndarray,
     ) -> dict:
         """Implements the policy gradient actor update."""
         obs = ptu.from_numpy(obs)
         actions = ptu.from_numpy(actions)
         advantages = ptu.from_numpy(advantages)
-        if self.discrete:
-            actions = actions.long()
 
         # TODO: compute the policy gradient actor loss
         loss = None
-        dist = self(obs)
+        # obs = ptu.from_numpy(obs)
+        dist = self.forward(obs)
+        # action = dist.rsample()
         log_prob = dist.log_prob(actions)
-        loss = (-advantages*log_prob).mean()
-
-        # TODO: perform an optimizer step
+        loss = (-advantages * log_prob).mean()
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        # TODO: perform an optimizer step
+        pass
 
         return {
             "Actor Loss": loss.item(),

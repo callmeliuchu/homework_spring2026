@@ -87,12 +87,21 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         # Train the agent
         if step >= config["training_starts"]:
             # TODO(Section 3.1): Sample a batch of config["batch_size"] transitions from the replay buffer
-            batch = ptu.from_numpy(replay_buffer.sample(config['batch_size']))
-            #             "observations": self.observations[rand_indices],
+            batch = replay_buffer.sample(config["batch_size"])
+            # "observations": self.observations[rand_indices],
             # "actions": self.actions[rand_indices],
             # "rewards": self.rewards[rand_indices],
             # "next_observations": self.next_observations[rand_indices],
             # "dones": self.dones[rand_indices],
+
+
+        #             observations: torch.Tensor,
+        # actions: torch.Tensor,
+        # rewards: torch.Tensor,
+        # next_observations: torch.Tensor,
+        # dones: torch.Tensor,
+        # step: int,
+            batch = ptu.from_numpy(batch)
             update_info = agent.update(
                 batch['observations'],
                 batch['actions'],
