@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import math
 from typing import Dict
 
 import torch
 
+from llm_rl_final_proj.models.logprobs import (
+    approx_kl_from_logprobs,
+    compute_per_token_logprobs,
+    masked_mean,
+)
 from llm_rl_final_proj.rl.base import RLAlgorithm
-from llm_rl_final_proj.rollout.rollout_buffer import RolloutBatch
-
+from llm_rl_final_proj.rollout.rollout_buffer import RolloutBatch, iter_minibatches
+from llm_rl_final_proj.utils.torch_utils import clip_grad_norm_
 
 class DrGRPO(RLAlgorithm):
     """DrGRPO removes the GRPO sequence-length normalization and std scaling."""
@@ -20,9 +26,134 @@ class DrGRPO(RLAlgorithm):
         rollout: RolloutBatch,
         grad_accum_steps: int = 1,
     ) -> Dict[str, float]:
-        del model, optimizer, rollout, grad_accum_steps
+        # del model, optimizer, rollout, grad_accum_steps
         # TODO(student): implement DrGRPO.
         # Start from your GRPO implementation, then make the two intended changes:
         #   1. use the DrGRPO advantage convention (configured in online/train_rm_grpo.py),
         #   2. remove the per-sequence length normalization inside the surrogate.
-        raise NotImplementedError("Implement DrGRPO.update in the student starter.")
+        # raise NotImplementedError("Implement DrGRPO.update in the student starter.")
+
+        cfg = self.cfg
+        model.train()
+        model.config.use_cache = False
+
+        total_loss = 0.0
+        total_kl = 0.0
+        total_clipfrac = 0.0
+        total_entropy = 0.0
+        n_mb = 0
+        accum = 0
+        skipped_empty = 0
+        skipped_nonfinite = 0
+        total_grad_norm = 0.0
+        opt_steps = 0
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+
+        optimizer.zero_grad(set_to_none=True)
+        rng = torch.Generator(device=rollout.input_ids.device)
+        rng.manual_seed(self._next_update_seed())
+
+        clip_low = 1.0 - cfg.clip_eps
+        clip_high = 1.0 + (cfg.clip_eps_high if cfg.clip_eps_high > 0.0 else cfg.clip_eps)
+
+        # TODO(student): implement one GRPO training iteration.
+        # The intended structure is:
+        #   1. loop over PPO epochs,
+        #   2. iterate over rollout minibatches,
+        #   3. recompute token log-probabilities under the current policy,
+        #   4. form PPO ratios against mb.old_logprobs,
+        #   5. apply token-level clipping with the sequence-level GRPO averaging used in this codebase,
+        #   6. add KL regularization against mb.ref_logprobs,
+        #   7. handle gradient accumulation / clipping / optimizer steps,
+        #   8. return the logged metrics expected by the training script.
+        for _ in range(cfg.ppo_epochs):
+            for mb in iter_minibatches(
+                rollout,
+                cfg.minibatch_size,
+                shuffle=True,
+                generator=rng,
+                device=next(model.parameters()).device,
+            ):
+                adv = mb.advantages.clamp(-cfg.adv_clip, cfg.adv_clip).detach()
+                mask = mb.completion_mask
+                if float(mask.sum().item()) <= 0.0:
+                    skipped_empty += 1
+                    continue
+
+                # 1. new_logp = compute_per_token_logprobs(model, mb.input_ids, mb.attention_mask)
+                # 2. log_ratio = clamp(new_logp - mb.old_logprobs, [-20, 20]) BEFORE exp
+                # 3. ratio = exp(log_ratio)
+                # 4. Broadcast advantages via adv.unsqueeze(1)
+                # 5. PPO clipped token objectives, masked by completion tokens
+                # 6. seq_obj_i = masked_mean_per_row(per_token_obj, mask)
+                # 7. pg_loss = - mean_i seq_obj_i
+                # 8. kl = approx_kl_from_logprobs(new_logp, mb.ref_logprobs, mask)
+                # 9. entropy = -masked_mean(new_logp, mask) for LOGGING ONLY
+                # 10. clipfrac = masked fraction where ratio was clipped
+                new_logp = compute_per_token_logprobs(model, mb.input_ids, mb.attention_mask)
+                log_ratio = torch.clamp(new_logp - mb.old_logprobs, min=-20.0, max=20.0)
+                ratio = torch.exp(log_ratio)
+
+                adv_b = adv.unsqueeze(1)
+                unclipped = ratio * adv_b
+                clipped_ratio = torch.clamp(ratio, min=clip_low, max=clip_high)
+                clipped = clipped_ratio * adv_b
+                per_token_obj = torch.minimum(unclipped, clipped) * mask
+                # DrGRPO: average over all completion tokens in the minibatch, without
+                # dividing each sequence by its own length first (GRPO uses masked_mean_per_row).
+                pg_loss = -masked_mean(per_token_obj, mask)
+
+                kl = approx_kl_from_logprobs(new_logp, mb.ref_logprobs, mask)
+                entropy = -masked_mean(new_logp, mask)
+                clipfrac = masked_mean((ratio != clipped_ratio).float(), mask)
+
+                loss = (pg_loss + cfg.kl_coef * kl) / max(1, grad_accum_steps)
+                if not torch.isfinite(loss):
+                    skipped_nonfinite += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    accum = 0
+                    continue
+                loss.backward()
+
+                accum += 1
+                if (accum % max(1, grad_accum_steps)) == 0:
+                    gnorm = clip_grad_norm_(trainable_params, cfg.max_grad_norm)
+                    if not math.isfinite(gnorm):
+                        skipped_nonfinite += 1
+                        optimizer.zero_grad(set_to_none=True)
+                        accum = 0
+                        continue
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    total_grad_norm += float(gnorm)
+                    opt_steps += 1
+
+                total_loss += float((loss.detach() * max(1, grad_accum_steps)).item())
+                total_kl += float(kl.detach().item())
+                total_entropy += float(entropy.detach().item())
+                total_clipfrac += float(clipfrac.detach().item())
+                n_mb += 1
+
+        if accum > 0 and (accum % max(1, grad_accum_steps)) != 0:
+            gnorm = clip_grad_norm_(trainable_params, cfg.max_grad_norm)
+            if math.isfinite(gnorm):
+                optimizer.step()
+                total_grad_norm += float(gnorm)
+                opt_steps += 1
+            else:
+                skipped_nonfinite += 1
+            optimizer.zero_grad(set_to_none=True)
+
+        denom = max(1, n_mb)
+        return {
+            "train/policy_loss_with_kl_penalty_mean_over_minibatches": total_loss / denom,
+            "train/approximate_kl_divergence_policy_vs_reference_mean_over_minibatches": total_kl / denom,
+            "train/policy_token_entropy_mean_over_minibatches": total_entropy / denom,
+            "train/fraction_of_completion_tokens_where_ppo_ratio_was_clipped_mean_over_minibatches": total_clipfrac / denom,
+            "train/count_minibatches_skipped_because_completion_mask_had_no_tokens": float(skipped_empty),
+            "train/count_update_attempts_skipped_due_to_nonfinite_loss_or_gradients": float(skipped_nonfinite),
+            "train/gradient_global_norm_after_clipping_mean_over_optimizer_steps": total_grad_norm / max(1, opt_steps),
+            "train/count_optimizer_steps_per_training_iteration": float(opt_steps),
+        }
+
+

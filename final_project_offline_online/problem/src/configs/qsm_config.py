@@ -6,10 +6,9 @@ import ogbench
 import torch
 import torch.nn as nn
 
-import infrastructure.pytorch_util as ptu
 from infrastructure.replay_buffer import ReplayBuffer
 from infrastructure.utils import EpisodeMonitor
-from networks.rl_networks import Policy, EnsembleCritic, DeterministicPolicy, VectorFieldPolicy
+from networks.rl_networks import EnsembleCritic, VectorFieldPolicy
 
 
 
@@ -21,22 +20,32 @@ def qsm_config(
     learning_rate: float = 3e-4,
     discount: float = 0.99,
     target_update_rate: float = 0.005,
-    flow_steps: int = 10,
-    alpha: float = 1.0,
+    flow_steps: int = 5,
     total_steps: int = 1000000,
     batch_size: int = 256,
     rho: float = 0.5,
-    inv_temp: float = 1.0,
+    inv_temp: float = 50.0,
     **kwargs,
 ):
     def make_actor(observation_shape: Tuple[int, ...], action_dim: int) -> nn.Module:
         # TODO(student): Create actor
-        return ...
+        return VectorFieldPolicy(
+            ac_dim=action_dim,
+            ob_dim=int(np.prod(observation_shape)),
+            n_layers=num_layers,
+            layer_size=hidden_size,
+        )
 
 
     def make_critic(observation_shape: Tuple[int, ...], action_dim: int) -> nn.Module:
         # TODO(student): Create critic (ensemble of Q-functions)
-        return ...
+        return EnsembleCritic(
+            ob_dim=int(np.prod(observation_shape)),
+            ac_dim=action_dim,
+            n_layers=num_layers,
+            size=hidden_size,
+            n_ensembles=2,
+        )
     
     def make_optimizer(params: torch.nn.ParameterList) -> torch.optim.Optimizer:
         return torch.optim.Adam(params, lr=learning_rate)
@@ -66,7 +75,6 @@ def qsm_config(
             "discount": discount,
             "target_update_rate": target_update_rate,
             "flow_steps": flow_steps,
-            "alpha": alpha,
             "inv_temp": inv_temp,
         },
         "agent": "qsm",

@@ -1,3 +1,4 @@
+import dis
 from typing import Optional
 import torch
 from torch import nn
@@ -46,7 +47,7 @@ class SACBCAgent(nn.Module):
         """
         Used for evaluation.
         """
-        observation = ptu.from_numpy(np.asarray(observation))[None]
+        observation = ptu.from_numpy(np.asarray(observation))[None] # 1,action_dim
         # Get the mode action from a tanh transformed distribution.
         action = self.actor(observation).base_dist.base_dist.mode.tanh()
         return ptu.to_numpy(action[0])
@@ -64,14 +65,14 @@ class SACBCAgent(nn.Module):
         Update Q(s, a)
         """
         # TODO(student): Compute the Q loss
-        q = self.critic(observations,actions)
-        next_dist = self.actor(next_observations)
-        next_actions = next_dist.sample()
+        ## 
+        dist = self.actor(next_observations) # B O
+        next_actions = dist.sample() # B A
         with torch.no_grad():
-            next_q = self.target_critic(next_observations,next_actions)
-            target = rewards + (1-dones.float()) * self.discount * (next_q.min(dim=0).values - self.beta() * next_dist.log_prob(next_actions))
-
+            target = rewards + (1-dones.float()) * self.discount * self.target_critic(next_observations,next_actions).mean(dim=0).unsqueeze(0) # 2 B 
+        q = self.critic(observations,actions)  # q 迭代？q(s,a) = r + gamma * q(s',a')
         loss = ((q-target) ** 2).mean()
+
         self.critic_optimizer.zero_grad()
         loss.backward()
         self.critic_optimizer.step()
@@ -94,11 +95,10 @@ class SACBCAgent(nn.Module):
         """
         # TODO(student): Compute the actor loss
         dist = self.actor(observations)
-        sample_action = dist.rsample()
-        q = self.critic(observations,sample_action) # 2 B 
-        q_loss = -q.min(dim=0).values.mean()
+        sample_action = dist.rsample() # B,A
+        q_loss = -self.critic(observations,sample_action).min(dim=0).values.mean()
 
-        mses = (sample_action - actions) ** 2
+        mses = (actions - sample_action) ** 2
         bc_loss = self.alpha * mses.mean()
 
         entropy_loss = self.beta().detach() * dist.log_prob(sample_action).mean()
@@ -166,4 +166,4 @@ class SACBCAgent(nn.Module):
         # TODO(student): Update target_critic using Polyak averaging with self.target_update_rate
         with torch.no_grad():
             for data1,data2 in zip(self.critic.parameters(),self.target_critic.parameters()):
-                data2.data.copy_((1-self.target_update_rate) * data2.data + self.target_update_rate * data1.data)
+                data2.data.copy_(data1.data * self.target_update_rate + (1-self.target_update_rate) * data2.data)

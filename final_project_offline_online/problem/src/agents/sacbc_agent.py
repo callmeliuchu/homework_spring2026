@@ -46,9 +46,9 @@ class SACBCAgent(nn.Module):
         """
         Used for evaluation.
         """
-        observation = ptu.from_numpy(np.asarray(observation))[None]
+        observation = ptu.from_numpy(np.asarray(observation))[None] # 1 O? 
         # Get the mode action from a tanh transformed distribution.
-        action = self.actor(observation).base_dist.base_dist.mode.tanh()
+        action = self.actor(observation).base_dist.base_dist.mode.tanh() # 1,A
         return ptu.to_numpy(action[0])
 
     @torch.compile
@@ -64,8 +64,13 @@ class SACBCAgent(nn.Module):
         Update Q(s, a)
         """
         # TODO(student): Compute the Q loss
-        q = ...
-        loss = ...
+        with torch.no_grad():
+            next_dist = self.actor(next_observations)
+            next_actions = next_dist.sample() # B,A
+            target = rewards + (1-dones.float()) * self.discount * self.target_critic(next_observations,next_actions).mean(dim=0) # 2,B
+
+        q = self.critic(observations,actions) # 2,B
+        loss = ((q - target) ** 2).mean()
 
         self.critic_optimizer.zero_grad()
         loss.backward()
@@ -88,12 +93,14 @@ class SACBCAgent(nn.Module):
         Update the actor
         """
         # TODO(student): Compute the actor loss
-        q_loss = ...
+        dist = self.actor(observations)
+        sample_actions = dist.rsample() # B,A
+        q_loss = -self.critic(observations,sample_actions).mean()
 
-        mses = ...
-        bc_loss = ...
+        mses = (sample_actions - actions) ** 2
+        bc_loss = self.alpha * mses.mean()
 
-        entropy_loss = ...
+        entropy_loss = self.beta().detach() * dist.log_prob(sample_actions).mean()
 
         loss = q_loss + bc_loss + entropy_loss
 
@@ -156,4 +163,5 @@ class SACBCAgent(nn.Module):
 
     def update_target_critic(self) -> None:
         # TODO(student): Update target_critic using Polyak averaging with self.target_update_rate
-        ...
+        for data2, data1 in zip(self.critic.parameters(),self.target_critic.parameters()):
+            data1.data.copy_(data1.data * (1 - self.target_update_rate) + data2.data * self.target_update_rate)

@@ -10,7 +10,10 @@ import ml_collections
 import numpy as np
 import torch
 from torch import nn
-import wandb
+try:
+    import wandb
+except ImportError:  # Optional for remote runs without Weights & Biases.
+    wandb = None
 from PIL import Image, ImageEnhance
 
 
@@ -21,7 +24,10 @@ class Logger:
         self.path = path
         self.header = None
         self.file = None
-        self.disallowed_types = (wandb.Image, wandb.Video, wandb.Histogram)
+        if wandb is None:
+            self.disallowed_types = ()
+        else:
+            self.disallowed_types = (wandb.Image, wandb.Video, wandb.Histogram)
         self.rows = []
 
     def log(self, row, step):
@@ -38,7 +44,8 @@ class Logger:
             self.file.write(','.join([str(filtered_row.get(k, '')) for k in self.header]) + '\n')
         self.file.flush()
 
-        wandb.log(row, step=step)
+        if wandb is not None and wandb.run is not None:
+            wandb.log(row, step=step)
         self.rows.append(copy.deepcopy(row))
 
     def close(self):
@@ -103,6 +110,9 @@ def setup_wandb(
     config=None,
 ):
     """Set up Weights & Biases for logging."""
+    if wandb is None or mode in ('disabled', 'offline-disabled'):
+        return None
+
     wandb_output_dir = tempfile.mkdtemp()
     tags = [group] if group is not None else None
 

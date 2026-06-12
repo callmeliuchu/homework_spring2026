@@ -48,6 +48,9 @@ class GRPO(RLAlgorithm):
         rng = torch.Generator(device=rollout.input_ids.device)
         rng.manual_seed(self._next_update_seed())
 
+        clip_low = 1.0 - cfg.clip_eps
+        clip_high = 1.0 + cfg.clip_eps
+
         for _ in range(cfg.ppo_epochs):
             for mb in iter_minibatches(
                 rollout,
@@ -96,7 +99,48 @@ class GRPO(RLAlgorithm):
                 #    (do not add an entropy term to the loss)
                 # 10. clipfrac = masked fraction of completion-token positions where
                 #     the PPO ratio was clipped outside [1-clip_eps, 1+clip_eps]
-                raise NotImplementedError("student TODO: GRPO.update minibatch computations")
+                new_logp = compute_per_token_logprobs(model, mb.input_ids, mb.attention_mask)
+                log_ratio = torch.clamp(new_logp - mb.old_logprobs, min=-20.0, max=20.0)
+                ratio = torch.exp(log_ratio)
+
+                adv_b = adv.unsqueeze(1)
+                unclipped = ratio * adv_b
+                clipped_ratio = torch.clamp(ratio, min=clip_low, max=clip_high)
+                clipped = clipped_ratio * adv_b
+                per_token_obj = torch.minimum(unclipped, clipped) * mask
+                seq_obj = masked_mean_per_row(per_token_obj, mask)
+                pg_loss = -seq_obj.mean()
+
+                kl = approx_kl_from_logprobs(new_logp, mb.ref_logprobs, mask)
+                entropy = -masked_mean(new_logp, mask)
+                clipfrac = masked_mean((ratio != clipped_ratio).float(), mask)
+
+                loss = (pg_loss + cfg.kl_coef * kl) / max(1, grad_accum_steps)
+                if not torch.isfinite(loss):
+                    skipped_nonfinite += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    accum = 0
+                    continue
+                loss.backward()
+
+                accum += 1
+                if (accum % max(1, grad_accum_steps)) == 0:
+                    gnorm = clip_grad_norm_(trainable_params, cfg.max_grad_norm)
+                    if not math.isfinite(gnorm):
+                        skipped_nonfinite += 1
+                        optimizer.zero_grad(set_to_none=True)
+                        accum = 0
+                        continue
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    total_grad_norm += float(gnorm)
+                    opt_steps += 1
+
+                total_loss += float((loss.detach() * max(1, grad_accum_steps)).item())
+                total_kl += float(kl.detach().item())
+                total_entropy += float(entropy.detach().item())
+                total_clipfrac += float(clipfrac.detach().item())
+                n_mb += 1
 
         if accum > 0 and (accum % max(1, grad_accum_steps)) != 0:
             gnorm = clip_grad_norm_(trainable_params, cfg.max_grad_norm)

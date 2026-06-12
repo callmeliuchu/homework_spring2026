@@ -26,6 +26,7 @@ class Policy(nn.Module):
         use_tanh: bool = False,
         state_dependent_std: bool = False,
         fixed_std: Optional[float] = None,
+        log_std_bounds: Optional[tuple[float, float]] = None,
     ):
         super().__init__()
 
@@ -33,6 +34,7 @@ class Policy(nn.Module):
         self.discrete = discrete
         self.state_dependent_std = state_dependent_std
         self.fixed_std = fixed_std
+        self.log_std_bounds = log_std_bounds
 
         if discrete:
             self.logits_net = ptu.build_mlp(
@@ -77,8 +79,12 @@ class Policy(nn.Module):
             action_distribution = distributions.Categorical(logits=logits)
         else:
             if self.state_dependent_std:
-                mean, std = torch.chunk(self.net(obs), 2, dim=-1)
-                std = torch.nn.functional.softplus(std) + 1e-2
+                mean, std_param = torch.chunk(self.net(obs), 2, dim=-1)
+                if self.log_std_bounds is not None:
+                    low, high = self.log_std_bounds
+                    std = torch.exp(torch.clamp(std_param, low, high))
+                else:
+                    std = torch.nn.functional.softplus(std_param) + 1e-2
             else:
                 mean = self.net(obs)
                 if self.fixed_std:

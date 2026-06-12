@@ -23,25 +23,54 @@ def dsrl_config(
     target_update_rate: float = 0.005,
     flow_steps: int = 10,
     noise_scale: float = 1.0,
+    bc_pretrain_steps: int = 100000,
+    fixed_alpha: float = 0.01,
     total_steps: int = 1000000,
     batch_size: int = 256,
     **kwargs,
 ):
     def make_bc_flow_actor(observation_shape: Tuple[int, ...], action_dim: int) -> nn.Module:
         # TODO(student): Create BC flow actor - refer to FQL config
-        return ...
+        return VectorFieldPolicy(
+            ac_dim=action_dim,
+            ob_dim=int(np.prod(observation_shape)),
+            n_layers=num_layers,
+            layer_size=hidden_size,
+        )
 
     def make_noise_actor(observation_shape: Tuple[int, ...], action_dim: int) -> nn.Module:
         # TODO(student): Create noise actor - this can be a regular MLP
-        return ...
+        # return ...
+        return Policy(
+            ac_dim=action_dim,
+            ob_dim=int(np.prod(observation_shape)),
+            discrete=False,
+            n_layers=num_layers,
+            layer_size=hidden_size,
+            use_tanh=True,
+            state_dependent_std=True,
+            log_std_bounds=(-5.0, 1.0),
+        )
 
     def make_critic(observation_shape: Tuple[int, ...], action_dim: int) -> nn.Module:
         # TODO(student): Create critic - will be a ensemble of Q-functions
-        return ...
+        return EnsembleCritic(
+            ob_dim=int(np.prod(observation_shape)),
+            ac_dim=action_dim,
+            n_layers=num_layers,
+            size=hidden_size,
+            n_ensembles=2,
+        )
     
-    def make_noise_critic(observation_shape: Tuple[int, ...], action_dim: int) -> nn.Module:
-        # TODO(student): Create noise critic - will be a ensemble of Q-functions
-        return ...
+    def make_z_critic(observation_shape: Tuple[int, ...], action_dim: int) -> nn.Module:
+        # TODO(student): Create z critic - ensemble of Q_z(s, z) functions
+        return EnsembleCritic(
+            ob_dim=int(np.prod(observation_shape)),
+            ac_dim=action_dim,
+            n_layers=num_layers,
+            size=hidden_size,
+            n_ensembles=2,
+        )
 
     def make_optimizer(params) -> torch.optim.Optimizer:
         return torch.optim.Adam(params, lr=learning_rate)
@@ -69,11 +98,15 @@ def dsrl_config(
             "make_noise_actor_optimizer": make_optimizer,
             "make_critic": make_critic,
             "make_critic_optimizer": make_optimizer,
+            "make_z_critic": make_z_critic,
+            "make_z_critic_optimizer": make_optimizer,
 
             "discount": discount,
             "target_update_rate": target_update_rate,
             "flow_steps": flow_steps,
             "noise_scale": noise_scale,
+            "bc_pretrain_steps": bc_pretrain_steps,
+            "fixed_alpha": fixed_alpha,
         },
         "agent": "dsrl",
         "log_name": log_string,
