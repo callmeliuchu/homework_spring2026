@@ -18,6 +18,7 @@ class QSMAgent(nn.Module):
 
         discount: float,
         target_update_rate: float,
+        alpha: float,
         inv_temp: float,
         flow_steps: int,
     ):
@@ -40,20 +41,26 @@ class QSMAgent(nn.Module):
 
         self.discount = discount
         self.target_update_rate = target_update_rate
+        self.alpha = alpha
         self.inv_temp = inv_temp
         self.flow_steps = flow_steps
 
-        betas = self.linear_beta_schedule(flow_steps)
-        alphas = 1.0 -betas
-        alpha_hats = torch.cumprod(alphas,dim=0)
+        betas = self.cosine_beta_schedule(flow_steps)
+        alphas = 1.0 - betas
+        alpha_hats = torch.cumprod(alphas, dim=0)
         self.register_buffer("betas", betas) # TODO(student): Implement betas
         self.register_buffer("alphas", alphas) # TODO(student): Implement alphas
         self.register_buffer("alpha_hats", alpha_hats) # TODO(student): Implement alpha_hats
 
         self.to(ptu.device)
     
-    def linear_beta_schedule(self, timesteps):
-        return torch.linspace(1e-4, 2e-2, timesteps, dtype=torch.float32)
+    def cosine_beta_schedule(self, timesteps, s: float = 0.008):
+        steps = timesteps + 1
+        x = torch.linspace(0, timesteps, steps, dtype=torch.float32)
+        alpha_hats = torch.cos(((x / timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
+        alpha_hats = alpha_hats / alpha_hats[0]
+        betas = 1 - alpha_hats[1:] / alpha_hats[:-1]
+        return torch.clamp(betas, min=1e-5, max=0.999)
         
     
     @torch.compiler.disable
@@ -145,10 +152,15 @@ class QSMAgent(nn.Module):
         eps_pred = self.actor(observations, a_t, t_input)
 
         a_t_for_grad = a_t.detach().requires_grad_(True)
-        q = self.critic(observations, a_t_for_grad).mean(dim=0)
+        q = self.target_critic(observations, a_t_for_grad).mean(dim=0)
         q_grad = torch.autograd.grad(q.sum(), a_t_for_grad)[0].detach()
 
-        qsm_loss = ((eps_pred + self.inv_temp * q_grad) ** 2).mean()
+        sigma_t = (1 - alpha_hat).sqrt()
+        guidance_scale = self.alpha * self.inv_temp
+        eps_target = noise - guidance_scale * sigma_t * q_grad
+
+        bc_loss = ((noise - eps_pred) ** 2).mean()
+        qsm_loss = ((eps_pred - eps_target.detach()) ** 2).mean()
         loss = qsm_loss
         
         self.actor_optimizer.zero_grad()
@@ -158,6 +170,7 @@ class QSMAgent(nn.Module):
         return {
             'total_loss': loss,
             'qsm_loss': qsm_loss,
+            'bc_loss': bc_loss,
             'q_grad_norm': q_grad.norm(dim=-1).mean(),
             'eps_norm': eps_pred.norm(dim=-1).mean(),
         }

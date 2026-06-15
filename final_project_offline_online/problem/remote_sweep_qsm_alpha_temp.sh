@@ -15,9 +15,10 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-2}"
 export CUDA_VISIBLE_DEVICES WANDB_MODE=disabled
 
 run_qsm() {
-  local inv_temp="$1"
-  local flow_steps="$2"
-  echo "[$(date '+%F %T')] QSM inv_temp=${inv_temp} flow_steps=${flow_steps}"
+  local alpha="$1"
+  local inv_temp="$2"
+  local flow_steps="$3"
+  echo "[$(date '+%F %T')] QSM alpha=${alpha} inv_temp=${inv_temp} flow_steps=${flow_steps}"
   BASE_CONFIG=qsm \
   RUN_GROUP=fp_sweep_qsm_minimal_linear \
   ENV_NAME="$ENV_NAME" \
@@ -27,10 +28,10 @@ run_qsm() {
   LOG_INTERVAL="$LOG_INTERVAL" \
   EVAL_INTERVAL="$EVAL_INTERVAL" \
   NUM_EVAL_TRAJECTORIES="$NUM_EVAL_TRAJECTORIES" \
-  ./remote_run_offline_online.sh --inv_temp="$inv_temp" --flow_steps="$flow_steps"
+  ./remote_run_offline_online.sh --alpha="$alpha" --inv_temp="$inv_temp" --flow_steps="$flow_steps"
 }
 
-run_qsm 50 10
-run_qsm 100 10
-run_qsm 30 10
-run_qsm 50 5
+run_qsm 0.01 50 10
+run_qsm 0.03 50 10
+run_qsm 0.1 50 10
+run_qsm 0.03 100 10

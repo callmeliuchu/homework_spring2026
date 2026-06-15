@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from datetime import datetime
 
@@ -36,6 +37,9 @@ def run_offline_training_loop(config: dict, train_logger, eval_logger, args: arg
     )
 
     ep_len = env.spec.max_episode_steps or env.max_episode_steps
+    best_success = -float("inf")
+    best_agent_path = os.path.join(args.save_dir, "best_agent.pt")
+    best_eval_path = os.path.join(args.save_dir, "best_eval.json")
 
     for step in tqdm.trange(start_step, start_step + args.offline_training_steps, dynamic_ncols=True):
         # Train with offline RL
@@ -68,12 +72,18 @@ def run_offline_training_loop(config: dict, train_logger, eval_logger, args: arg
             
             successes = [t["episode_statistics"]["s"] for t in trajectories]
 
+            success_rate = float(np.mean(successes))
             eval_logger.log(
                 {
-                    "eval/success_rate": float(np.mean(successes)),
+                    "eval/success_rate": success_rate,
                 },
                 step=step,
             )
+            if success_rate > best_success:
+                best_success = success_rate
+                torch.save(agent.state_dict(), best_agent_path)
+                with open(best_eval_path, "w") as f:
+                    json.dump({"step": step, "eval/success_rate": success_rate}, f)
 
     return dump_log(agent, train_logger, eval_logger, config, args.save_dir)
 
@@ -118,6 +128,9 @@ def run_online_training_loop(config: dict, train_logger, eval_logger, args: argp
     batch_size = config["batch_size"]
 
     observation, _ = env.reset()
+    best_success = -float("inf")
+    best_agent_path = os.path.join(args.save_dir, "best_online_agent.pt")
+    best_eval_path = os.path.join(args.save_dir, "best_online_eval.json")
 
     for step in tqdm.trange(start_step, start_step + args.online_training_steps, dynamic_ncols=True):
         action = agent.get_action(observation)
@@ -162,10 +175,16 @@ def run_online_training_loop(config: dict, train_logger, eval_logger, args: argp
                 ep_len,
             )
             successes = [t["episode_statistics"]["s"] for t in trajectories]
+            success_rate = float(np.mean(successes))
             eval_logger.log(
-                {"eval/success_rate": float(np.mean(successes))},
+                {"eval/success_rate": success_rate},
                 step=step,
             )
+            if success_rate > best_success:
+                best_success = success_rate
+                torch.save(agent.state_dict(), best_agent_path)
+                with open(best_eval_path, "w") as f:
+                    json.dump({"step": step, "eval/success_rate": success_rate}, f)
 
     dump_log(agent, train_logger, eval_logger, config, args.save_dir)
 

@@ -23,7 +23,7 @@ generate_and_sync() {
   done
 
   echo "[$(date '+%F %T')] generating ${name} gif"
-  ssh a100 "cd '${REMOTE_ROOT}' && mkdir -p visualizations && WANDB_MODE=disabled ${REMOTE_PY} src/scripts/preview_checkpoint.py --base_config '${base_config}' --env_name cube-single-play-singletask-task1-v0 --checkpoint_path '${run_dir}/agent.pt' --gif_path '${remote_gif}' --episodes 8 --fps 20 --which_gpu 0"
+  ssh a100 "cd '${REMOTE_ROOT}' && mkdir -p visualizations && PYTHONPATH=src MUJOCO_GL=egl PYOPENGL_PLATFORM=egl WANDB_MODE=disabled ${REMOTE_PY} src/scripts/preview_checkpoint.py --base_config '${base_config}' --env_name cube-single-play-singletask-task1-v0 --checkpoint_path '${run_dir}/agent.pt' --gif_path '${remote_gif}' --episodes 8 --fps 20 --which_gpu 0"
 
   echo "[$(date '+%F %T')] syncing ${name} gif to local"
   rsync -az "a100:${REMOTE_ROOT}/${remote_gif}" "${local_gif}"
