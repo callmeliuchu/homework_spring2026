@@ -156,7 +156,7 @@ def run_training(config: TrainConfig) -> None:
             #     config.flow_num_steps,
             #     step,
             #     logger)
-    torch.save(model.state_dict(),f'{config.policy_type}.pt')
+    torch.save(model.state_dict(),f'{config.policy_type}{config.chunk_size}.pt')
     
 
 
