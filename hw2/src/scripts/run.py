@@ -14,7 +14,6 @@ from infrastructure import pytorch_util as ptu
 from infrastructure.log_utils import setup_wandb, Logger, dump_log
 
 MAX_NVIDEO = 2
-ABSOLUTE_MODEL_PATH = "agent.pt"
 
 
 def run_training_loop(logger, args):
@@ -62,10 +61,9 @@ def run_training_loop(logger, args):
         print(f"\n********** Iteration {itr} ************")
         # TODO: sample `args.batch_size` transitions using utils.sample_trajectories
         # make sure to use `max_ep_len`
-        trajs, envsteps_this_batch = None, None
-        trajs, envsteps_this_batch  =  utils.sample_trajectories(
+        trajs, envsteps_this_batch = utils.sample_trajectories(
                 env, agent.actor, args.batch_size, max_ep_len
-        )
+            )
         total_envsteps += envsteps_this_batch
 
         # trajs should be a list of dictionaries of NumPy arrays, where each dictionary corresponds to a trajectory.
@@ -73,18 +71,18 @@ def run_training_loop(logger, args):
         trajs_dict = {k: [traj[k] for traj in trajs] for k in trajs[0]}
 
         # TODO: train the agent using the sampled trajectories and the agent's update function
-        train_info: dict = None
-        # obs: Sequence[np.ndarray],
-        # actions: Sequence[np.ndarray],
-        # rewards: Sequence[np.ndarray],
-        # terminals: Sequence[np.ndarray],
-        # "observation": np.array(obs, dtype=np.float32),
+
+        #         "observation": np.array(obs, dtype=np.float32),
         # "image_obs": np.array(image_obs, dtype=np.uint8),
         # "reward": np.array(rewards, dtype=np.float32),
         # "action": np.array(acs, dtype=np.float32),
         # "next_observation": np.array(next_obs, dtype=np.float32),
         # "terminal": np.array(terminals, dtype=np.float32),
-        train_info = agent.update(trajs_dict['observation'],trajs_dict['action'],trajs_dict['reward'],trajs_dict['terminal'])
+        obs = trajs_dict['observation']
+        actions = trajs_dict['action']
+        rewards = trajs_dict['reward']
+        terminals = trajs_dict['terminal']
+        train_info: dict = agent.update(obs,actions,rewards,terminals)
 
         if itr % args.scalar_log_freq == 0:
             # save eval metrics
@@ -124,8 +122,6 @@ def run_training_loop(logger, args):
             )
 
     dump_log(agent, logger, args, args.save_dir)
-    # Also save a copy to a fixed absolute path.
-    torch.save(agent.state_dict(), ABSOLUTE_MODEL_PATH)
 
 
 def setup_arguments(args=None):
