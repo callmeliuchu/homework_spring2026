@@ -9,9 +9,6 @@ import torch
 from torch import nn
 
 
-DiffusionScheduleType: TypeAlias = Literal["linear", "sqrt", "cosine"]
-
-
 class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
     """Base class for action chunking policies."""
 
@@ -48,15 +45,14 @@ class MSEPolicy(BasePolicy):
         chunk_size: int,
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
-        # raise NotImplementedError
-        super().__init__(state_dim,action_dim,chunk_size)
+        super().__init__(state_dim, action_dim, chunk_size)
         layers = []
         start = state_dim
-        for i in range(len(hidden_dims)):
-            layers.append(nn.Linear(start,hidden_dims[i]))
+        for hidden_dim in hidden_dims:    
+            layers.append(nn.Linear(start,hidden_dim))
             layers.append(nn.ReLU())
-            start = hidden_dims[i]
-        layers.append(nn.Linear(start,chunk_size*action_dim))
+            start = hidden_dim
+        layers.append(nn.Linear(start,chunk_size * action_dim))
         self.mlp = nn.Sequential(*layers)
 
     def compute_loss(
@@ -65,10 +61,9 @@ class MSEPolicy(BasePolicy):
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
         # raise NotImplementedError
-        # state B,state_dim action_chunks B chunk_size Action_dim
-        outputs = self.mlp(state) # B,chunk_size*action_dim
-        outputs = outputs.reshape(-1,self.chunk_size,self.action_dim)
-        loss = ((outputs - action_chunk)**2).sum(dim=-1).mean()
+        B = state.shape[0]
+        outputs = self.mlp(state) # B,S
+        loss = ((outputs.reshape(-1,self.chunk_size,self.action_dim) - action_chunk) ** 2).mean()
         return loss
 
     def sample_actions(
@@ -79,10 +74,8 @@ class MSEPolicy(BasePolicy):
     ) -> torch.Tensor:
         # raise NotImplementedError
         with torch.no_grad():
-            outputs = self.mlp(state) # B,chunk_size*action_dim
-            outputs = outputs.reshape(-1,self.chunk_size,self.action_dim)
-            return outputs
-
+            outputs = self.mlp(state)
+            return outputs.reshape(-1, self.chunk_size, self.action_dim)
 
 class FlowMatchingPolicy(BasePolicy):
     """Predicts action chunks with a flow matching loss."""
@@ -95,35 +88,30 @@ class FlowMatchingPolicy(BasePolicy):
         chunk_size: int,
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
-        super().__init__(state_dim,action_dim,chunk_size)
+        super().__init__(state_dim, action_dim, chunk_size)
         layers = []
-        start = state_dim + chunk_size*action_dim + 1 # state 
-        for i in range(len(hidden_dims)):
-            layers.append(nn.Linear(start,hidden_dims[i]))
+        start = state_dim + chunk_size * action_dim + 1
+        for hidden_dim in hidden_dims:    
+            layers.append(nn.Linear(start,hidden_dim))
             layers.append(nn.ReLU())
-            start = hidden_dims[i]
-        layers.append(nn.Linear(start,chunk_size*action_dim))
+            start = hidden_dim
+        layers.append(nn.Linear(start,chunk_size * action_dim))
         self.mlp = nn.Sequential(*layers)
-
 
     def compute_loss(
         self,
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
+        # raise NotImplementedError
         B = state.shape[0]
-        t = torch.rand(B, 1, 1, device=state.device)
-        theta = (torch.pi / 2) * t
-        noise = torch.randn(B, self.chunk_size, self.action_dim, device=state.device)
-        Xt = torch.cos(theta) * noise + torch.sin(theta) * action_chunk
-        Xt = Xt.reshape(-1,self.action_dim*self.chunk_size)
-        velocity = (torch.pi / 2) * (
-            -torch.sin(theta) * noise + torch.cos(theta) * action_chunk
-        )
-        St = torch.concat([state,Xt,t.reshape(B,1)],dim=-1)
-        pred_velocity = self.mlp(St)
-        pred_velocity = pred_velocity.reshape(-1,self.chunk_size,self.action_dim) # B,A,C
-        loss = ((pred_velocity - velocity) ** 2).mean()
+        noise = torch.randn(B,self.chunk_size * self.action_dim)
+        t = torch.rand(B,1)
+        xt =  noise * (1 - t) + t * action_chunk.reshape(B,-1)
+        xt = torch.concat([state,xt,t],dim=-1)
+        vt = self.mlp(xt) # B, self.chunk_size * self.action_dim
+        labels = action_chunk.reshape(B,-1) - noise
+        loss = ((labels - vt) ** 2).mean()
         return loss
 
     def sample_actions(
@@ -134,153 +122,15 @@ class FlowMatchingPolicy(BasePolicy):
     ) -> torch.Tensor:
         # raise NotImplementedError
         with torch.no_grad():
-            delta = 1 / num_steps
             B = state.shape[0]
-            chunk = torch.randn(B,self.action_dim*self.chunk_size).to(state.device) # B,A,C
-            for step in range(num_steps):
-                t = torch.full((B,1), (step + 1) / num_steps, device=state.device)
-                St = torch.concat([state,chunk,t],dim=-1)
-                velocity = self.mlp(St)
-                chunk += delta * velocity
-            return chunk.reshape(-1,self.chunk_size,self.action_dim)
+            action = torch.randn(B,self.chunk_size * self.action_dim)
+            for t in range(num_steps):
+                xt = torch.concat([state,action,torch.full((B,1),t / num_steps)],dim=-1)
+                vt = self.mlp(xt)
+                action += vt * 1 / num_steps
+            return action.reshape(B,self.chunk_size,self.action_dim)
 
-
-class DiffusionPolicy(BasePolicy):
-    """Predicts action chunks with a velocity diffusion loss."""
-
-    def __init__(
-        self,
-        state_dim: int,
-        action_dim: int,
-        chunk_size: int,
-        hidden_dims: tuple[int, ...] = (128, 128),
-        num_train_steps: int = 50,
-        schedule_type: DiffusionScheduleType = "linear",
-    ) -> None:
-        super().__init__(state_dim, action_dim, chunk_size)
-        self.num_train_steps = num_train_steps
-        self.schedule_type = schedule_type
-        alpha_bars = self._build_alpha_bars(num_train_steps, schedule_type)
-        self.register_buffer("alpha_bars", alpha_bars)
-
-        layers = []
-        dim = state_dim + chunk_size * action_dim + 1
-        for hidden_dim in hidden_dims:
-            layers.append(nn.Linear(dim, hidden_dim))
-            layers.append(nn.ReLU())
-            dim = hidden_dim
-        layers.append(nn.Linear(dim, chunk_size * action_dim))
-        self.mlp = nn.Sequential(*layers)
-
-    @staticmethod
-    def _build_alpha_bars(
-        num_train_steps: int,
-        schedule_type: DiffusionScheduleType,
-    ) -> torch.Tensor:
-        if schedule_type == "linear":
-            betas = torch.linspace(1e-4, 0.02, num_train_steps)
-            return torch.cumprod(1.0 - betas, dim=0)
-        if schedule_type == "sqrt":
-            return torch.linspace(1.0, 0.0, num_train_steps)
-        if schedule_type == "cosine":
-            steps = torch.linspace(0, num_train_steps, num_train_steps + 1)
-            offset = 0.008
-            alpha_bar_curve = torch.cos(
-                ((steps / num_train_steps) + offset) / (1 + offset) * torch.pi * 0.5
-            ) ** 2
-            alpha_bar_curve = alpha_bar_curve / alpha_bar_curve[0]
-            betas = 1.0 - (alpha_bar_curve[1:] / alpha_bar_curve[:-1])
-            betas = betas.clamp(1e-4, 0.999)
-            return torch.cumprod(1.0 - betas, dim=0)
-        raise ValueError(f"Unknown diffusion schedule type: {schedule_type}")
-
-    def _alpha_sigma(self, timesteps: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        alpha_bar = self.alpha_bars[timesteps].view(-1, 1, 1)
-        alpha = torch.sqrt(alpha_bar)
-        sigma = torch.sqrt(1.0 - alpha_bar)
-        return alpha, sigma
-
-    def _predict_velocity(
-        self,
-        state: torch.Tensor,
-        noisy_chunk: torch.Tensor,
-        timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        batch_size = state.shape[0]
-        model_input = torch.cat(
-            [
-                state,
-                noisy_chunk.reshape(batch_size, self.chunk_size * self.action_dim),
-                timesteps.float().unsqueeze(-1) / max(self.num_train_steps - 1, 1),
-            ],
-            dim=-1,
-        )
-        return self.mlp(model_input).reshape(
-            batch_size, self.chunk_size, self.action_dim
-        )
-
-    def compute_loss(
-        self,
-        state: torch.Tensor,
-        action_chunk: torch.Tensor,
-    ) -> torch.Tensor:
-        batch_size = state.shape[0]
-        timesteps = torch.randint(
-            0,
-            self.num_train_steps,
-            (batch_size,),
-            device=state.device,
-        )
-        noise = torch.randn_like(action_chunk)
-        alpha, sigma = self._alpha_sigma(timesteps)
-        noisy_chunk = alpha * action_chunk + sigma * noise
-        v_target = alpha * noise - sigma * action_chunk
-        v_pred = self._predict_velocity(state, noisy_chunk, timesteps)
-        return torch.mean((v_pred - v_target) ** 2)
-
-    def sample_actions(
-        self,
-        state: torch.Tensor,
-        *,
-        num_steps: int = 10,
-    ) -> torch.Tensor:
-        with torch.no_grad():
-            batch_size = state.shape[0]
-            chunk = torch.randn(
-                batch_size,
-                self.chunk_size,
-                self.action_dim,
-                device=state.device,
-            )
-            for timestep in range(self.num_train_steps - 1, -1, -1):
-                timestep_batch = torch.full(
-                    (batch_size,),
-                    timestep,
-                    device=state.device,
-                    dtype=torch.long,
-                )
-                alpha, sigma = self._alpha_sigma(timestep_batch)
-                v_pred = self._predict_velocity(state, chunk, timestep_batch)
-                x0_pred = alpha * chunk - sigma * v_pred
-                x0_pred = torch.clamp(x0_pred, -3.0, 3.0)
-                noise_pred = sigma * chunk + alpha * v_pred
-
-                if timestep == 0:
-                    chunk = x0_pred
-                    continue
-
-                prev_timestep = torch.full(
-                    (batch_size,),
-                    timestep - 1,
-                    device=state.device,
-                    dtype=torch.long,
-                )
-                alpha_prev, sigma_prev = self._alpha_sigma(prev_timestep)
-                chunk = alpha_prev * x0_pred + sigma_prev * noise_pred
-            return chunk
-
-
-PolicyType: TypeAlias = Literal["mse", "flow", "diffusion"]
+PolicyType: TypeAlias = Literal["mse", "flow"]
 
 
 def build_policy(
@@ -290,7 +140,6 @@ def build_policy(
     action_dim: int,
     chunk_size: int,
     hidden_dims: tuple[int, ...] = (128, 128),
-    diffusion_schedule: DiffusionScheduleType = "linear",
 ) -> BasePolicy:
     if policy_type == "mse":
         return MSEPolicy(
@@ -305,13 +154,5 @@ def build_policy(
             action_dim=action_dim,
             chunk_size=chunk_size,
             hidden_dims=hidden_dims,
-        )
-    if policy_type == "diffusion":
-        return DiffusionPolicy(
-            state_dim=state_dim,
-            action_dim=action_dim,
-            chunk_size=chunk_size,
-            hidden_dims=hidden_dims,
-            schedule_type=diffusion_schedule,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")
