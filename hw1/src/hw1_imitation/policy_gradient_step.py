@@ -65,7 +65,7 @@ class StepPPOConfig:
     value_lr: float = 1e-4
     value_coef: float = 0.5
     entropy_coef: float = 0.005
-    bc_coef: float = 0.03
+    bc_coef: float = 0.0
     target_kl: float = 0.03
 
     init_log_std: float = -4.0
@@ -109,6 +109,9 @@ class StepGaussianPolicy(nn.Module):
 
     def load_bc_mean(self, checkpoint_path: Path, device: torch.device) -> None:
         state_dict = torch.load(checkpoint_path, map_location=device)
+        if state_dict and all(not key.startswith("mlp.") for key in state_dict):
+            self.mlp.load_state_dict(state_dict)
+            return
         missing, unexpected = self.load_state_dict(state_dict, strict=False)
         allowed_missing = {"log_std"}
         if set(missing) != allowed_missing or unexpected:
@@ -326,10 +329,13 @@ def ppo_update(
             value_loss = ((value - returns) ** 2).mean()
             entropy_loss = -entropy.mean()
 
-            bc_state, bc_action_chunk = next(bc_loader_iter)
-            bc_state = bc_state.to(device)
-            bc_action = bc_action_chunk[:, 0, :].to(device)
-            bc_loss = ((policy.mean(bc_state) - bc_action) ** 2).mean()
+            if config.bc_coef > 0.0:
+                bc_state, bc_action_chunk = next(bc_loader_iter)
+                bc_state = bc_state.to(device)
+                bc_action = bc_action_chunk[:, 0, :].to(device)
+                bc_loss = ((policy.mean(bc_state) - bc_action) ** 2).mean()
+            else:
+                bc_loss = torch.zeros((), device=device)
 
             loss = (
                 policy_loss
@@ -421,8 +427,11 @@ def main() -> None:
     print(f"device={device}")
 
     normalizer, dataset, state_dim, action_dim = load_dataset(config)
-    bc_loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
-    bc_loader_iter = cycle(bc_loader)
+    if config.bc_coef > 0.0:
+        bc_loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
+        bc_loader_iter = cycle(bc_loader)
+    else:
+        bc_loader_iter = None
 
     policy = StepGaussianPolicy(
         state_dim=state_dim,
@@ -440,6 +449,7 @@ def main() -> None:
     )
 
     start_return, start_max_reward = evaluate_policy(policy, normalizer, config, device, iteration=0)
+    best_max_reward = start_max_reward
     print(
         f"[start] deterministic BC eval_return={start_return:.3f} "
         f"eval_max_reward={start_max_reward:.3f}"
@@ -472,16 +482,23 @@ def main() -> None:
                 f"[eval {iteration:04d}] deterministic_return={eval_return:.3f} "
                 f"deterministic_max_reward={eval_max_reward:.3f}"
             )
-            torch.save(
-                {
-                    "policy": policy.state_dict(),
-                    "value_net": value_net.state_dict(),
-                    "config": asdict(config),
-                    "policy_class": "StepGaussianPolicy",
-                },
-                config.output_checkpoint,
-            )
-            print(f"[save] {config.output_checkpoint}")
+            if eval_max_reward >= best_max_reward:
+                best_max_reward = eval_max_reward
+                torch.save(
+                    {
+                        "policy": policy.state_dict(),
+                        "value_net": value_net.state_dict(),
+                        "config": asdict(config),
+                        "policy_class": "StepGaussianPolicy",
+                    },
+                    config.output_checkpoint,
+                )
+                print(
+                    f"[save best] {config.output_checkpoint} "
+                    f"best_max_reward={best_max_reward:.3f}"
+                )
+            else:
+                print(f"[no save] best_max_reward={best_max_reward:.3f}")
 
 
 if __name__ == "__main__":

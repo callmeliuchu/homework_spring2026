@@ -130,7 +130,7 @@ def run_episode(
     seed: int,
     action_mode: Literal["mean", "sample"],
     collect_frames: bool,
-) -> tuple[float, list[np.ndarray]]:
+) -> tuple[float, float, list[np.ndarray]]:
     obs, _ = env.reset(seed=seed)
     action_low = env.action_space.low
     action_high = env.action_space.high
@@ -138,6 +138,7 @@ def run_episode(
     frames: list[np.ndarray] = []
     done = False
     episode_return = 0.0
+    episode_max_reward = 0.0
     step = 0
     chunk_index = chunk_size
     action_chunk: np.ndarray | None = None
@@ -164,6 +165,7 @@ def run_episode(
             frames.append(env.render())
 
         episode_return += float(reward)
+        episode_max_reward = max(episode_max_reward, float(reward))
         done = terminated or truncated
         chunk_index += 1
         step += 1
@@ -171,7 +173,7 @@ def run_episode(
         if max_steps is not None and step >= max_steps:
             break
 
-    return episode_return, frames
+    return episode_return, episode_max_reward, frames
 
 
 def main() -> None:
@@ -182,9 +184,10 @@ def main() -> None:
     env = gym.make(ENV_ID, obs_type="state", render_mode=config.render_mode)
     all_frames: list[np.ndarray] = []
     rewards: list[float] = []
+    max_rewards: list[float] = []
     try:
         for episode_idx in range(config.num_episodes):
-            reward, frames = run_episode(
+            reward, max_reward, frames = run_episode(
                 env,
                 model,
                 normalizer,
@@ -196,12 +199,15 @@ def main() -> None:
                 collect_frames=config.gif_path is not None,
             )
             rewards.append(reward)
+            max_rewards.append(max_reward)
             all_frames.extend(frames)
-            print(f"episode {episode_idx}: return={reward:.3f}")
+            print(f"episode {episode_idx}: return={reward:.3f} max_reward={max_reward:.3f}")
     finally:
         env.close()
 
     print(f"mean return: {np.mean(rewards):.3f}")
+    print(f"mean max_reward: {np.mean(max_rewards):.3f}")
+    print(f"success_rate@0.8: {np.mean(np.asarray(max_rewards) >= 0.8):.3f}")
     if config.gif_path is not None and all_frames:
         config.gif_path.parent.mkdir(parents=True, exist_ok=True)
         imageio.mimsave(config.gif_path, all_frames, fps=20)

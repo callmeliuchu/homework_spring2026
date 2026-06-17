@@ -12,7 +12,6 @@ import torch
 import tyro
 
 from hw1_imitation.play_policy import load_policy
-from hw1_imitation.model import DiffusionScheduleType
 
 ENV_ID = "gym_pusht/PushT-v0"
 
@@ -22,7 +21,6 @@ class ScoreConfig:
     checkpoint_path: Path
     data_dir: Path = Path("data")
     policy_type: str = "mse"
-    diffusion_schedule: DiffusionScheduleType = "linear"
     chunk_size: int = 8
     hidden_dims: tuple[int, ...] = (256, 256, 256)
     flow_num_steps: int = 10
@@ -33,6 +31,10 @@ class ScoreConfig:
 
 
 def score_policy(config: ScoreConfig) -> None:
+    np.random.seed(config.seed)
+    torch.manual_seed(config.seed)
+    torch.cuda.manual_seed_all(config.seed)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, normalizer = load_policy(config, device)
 
