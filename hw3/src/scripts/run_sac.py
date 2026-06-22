@@ -88,28 +88,14 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         if step >= config["training_starts"]:
             # TODO(Section 3.1): Sample a batch of config["batch_size"] transitions from the replay buffer
             batch = replay_buffer.sample(config["batch_size"])
-            # "observations": self.observations[rand_indices],
+            batch = ptu.from_numpy(batch)
+            #             "observations": self.observations[rand_indices],
             # "actions": self.actions[rand_indices],
             # "rewards": self.rewards[rand_indices],
             # "next_observations": self.next_observations[rand_indices],
             # "dones": self.dones[rand_indices],
-
-
-        #             observations: torch.Tensor,
-        # actions: torch.Tensor,
-        # rewards: torch.Tensor,
-        # next_observations: torch.Tensor,
-        # dones: torch.Tensor,
-        # step: int,
-            batch = ptu.from_numpy(batch)
-            update_info = agent.update(
-                batch['observations'],
-                batch['actions'],
-                batch['rewards'],
-                batch['next_observations'],
-                batch['dones'],
-                step
-            )
+            update_info = agent.update(batch['observations'],batch['actions'],batch['rewards'],batch['next_observations'],
+            batch['dones'],step)
             # ENDTODO
 
             # Logging
@@ -187,7 +173,7 @@ def make_logger(config: dict, args: argparse.Namespace) -> Logger:
         project=args.wandb_project,
         group=config["log_name"],
         name=logdir.split("/")[-1],
-        mode="disabled",
+        mode=args.wandb_mode,
         config=wandb_config,
     )
 
@@ -210,6 +196,12 @@ def main():
     # WandB arguments
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--wandb_project", type=str, default="hw3")
+    parser.add_argument(
+        "--wandb_mode",
+        type=str,
+        default="disabled",
+        choices=("disabled", "offline", "online"),
+    )
 
     args = parser.parse_args()
 

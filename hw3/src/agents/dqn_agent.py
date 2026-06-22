@@ -48,20 +48,13 @@ class DQNAgent(nn.Module):
         observation = ptu.from_numpy(np.asarray(observation))[None]
 
         # TODO(Section 2.4): get the action from the critic using an epsilon-greedy strategy
-        with torch.no_grad():
-            action = None
-            rn = np.random.uniform()
-            if rn < epsilon:
-                action = np.random.randint(self.num_actions)
-                return action
-            else:
-                # observation = ptu.from_numpy(observation)
-                logits = self.critic(observation) # O
-                action = torch.argmax(logits,dim=-1) # 1
-                # return ptu.to_numpy()
-            # raise NotImplementedError()
-            # ENDTODO
-            return ptu.to_numpy(action).squeeze(0).item()
+        p = np.random.rand()
+        if p < epsilon:
+            return int(np.random.randint(self.num_actions))
+        else:
+            values = self.critic(observation)
+            action = torch.argmax(values, dim=-1)
+            return int(action.item())
 
     def update_critic(
         self,
@@ -81,26 +74,22 @@ class DQNAgent(nn.Module):
 
             if self.use_double_q:
                 # TODO(Section 2.5): implement double-Q target action selection
-                next_action = self.critic(next_obs).argmax(dim=-1) # B,1
+                self_next_qa_values = self.critic(next_obs)
+                next_action = torch.argmax(self_next_qa_values,dim=-1)
             else:
-                next_action = next_qa_values.argmax(dim=-1)
+                next_action = torch.argmax(next_qa_values,dim=-1) # B
 
-            next_q_values = None
-            next_q_values = next_qa_values.gather(1,next_action.reshape(-1,1)).reshape(-1) # B
+            next_q_values = torch.gather(next_qa_values,1,next_action.reshape(-1,1)).squeeze(-1)
             assert next_q_values.shape == (batch_size,), next_q_values.shape
 
-            target_values = None
-            target_values = reward + self.discount * next_q_values * (1-done.float())
+            target_values = reward + self.discount * (1-done.float()) *next_q_values
             assert target_values.shape == (batch_size,), target_values.shape
             # ENDTODO
 
         # TODO(Section 2.4): train the critic with the target values
-        qa_values = self.critic(obs)
-        q_values = qa_values.gather(1,action.reshape(-1,1)).reshape(-1)
-        loss = ((q_values - target_values)**2).mean()
-        # self.critic_optimizer.zero_grad()
-        # loss.backward()
-        # self.critic_optimizer.step()
+        qa_values = self.critic(obs) # B,A
+        q_values = torch.gather(qa_values,1,action.reshape(-1,1)).squeeze(-1)
+        loss = ((q_values - target_values) ** 2).mean()
         # ENDTODO
 
         self.critic_optimizer.zero_grad()
@@ -138,6 +127,7 @@ class DQNAgent(nn.Module):
         critic_stats = self.update_critic(obs,action,reward,next_obs,done)
         # Hint: if step % self.target_update_period == 0: ...
         # ENDTODO
-        if step % self.target_update_period == 0:
-            self.target_critic.load_state_dict(self.critic.state_dict())
+        if step % self.target_update_period == 0: 
+            for data1,data2 in zip(self.critic.parameters(),self.target_critic.parameters()):
+                data2.data.copy_(data1.data)
         return critic_stats
